@@ -181,3 +181,5 @@ app.post('/api/chat', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 SonaAI Web Server berjalan di: http://localhost:${PORT}`);
 });
+
+export default app;

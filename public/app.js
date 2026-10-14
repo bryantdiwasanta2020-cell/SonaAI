@@ -1226,6 +1226,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   messageInput.addEventListener('input', autoResizeTextarea);
 
+  // Penyesuaian Keyboard Virtual di HP (Mobile Viewport Alignment)
+  messageInput.addEventListener('focus', () => {
+    setTimeout(() => {
+      messageInput.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      scrollToBottom();
+    }, 280);
+  });
+
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => {
+      if (document.activeElement === messageInput) {
+        messageInput.scrollIntoView({ block: 'nearest' });
+        scrollToBottom();
+      }
+    });
+  }
+
   // Mic Button
   micBtn.addEventListener('click', () => {
     if (isListening) {
