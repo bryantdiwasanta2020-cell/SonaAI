@@ -1,4 +1,14 @@
-// SonaAI Frontend Logic
+// SonaAI Frontend Logic - Anonymous Device Session Engine (Opsi A)
+function getOrCreateUserId() {
+  let uid = localStorage.getItem('sona_user_id');
+  if (!uid) {
+    uid = 'usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 9);
+    localStorage.setItem('sona_user_id', uid);
+  }
+  return uid;
+}
+const currentUserId = getOrCreateUserId();
+
 let currentConversationId = null;
 let conversations = [];
 let isVoiceCallActive = false;
@@ -7,6 +17,77 @@ let isListening = false;
 let speechRecognition = null;
 let voices = [];
 let currentUtterance = null;
+
+// === Siri Crystal Orb Reactive Animation Engine ===
+let speakingVisualizerRAF = null;
+let userSpeakingTimeout = null;
+
+function setOrbUserSpeaking(active) {
+  const wrapper = document.getElementById('voiceOrbWrapper');
+  const soundwave = document.getElementById('voiceSoundwaveBars');
+  if (!wrapper) return;
+
+  if (active) {
+    wrapper.classList.add('user-speaking');
+    if (soundwave) soundwave.classList.add('active');
+    if (userSpeakingTimeout) clearTimeout(userSpeakingTimeout);
+    userSpeakingTimeout = setTimeout(() => {
+      setOrbUserSpeaking(false);
+    }, 850);
+  } else {
+    wrapper.classList.remove('user-speaking');
+    if (soundwave && !isListening) soundwave.classList.remove('active');
+  }
+}
+
+function startSpeakingOrbPulse() {
+  if (speakingVisualizerRAF) cancelAnimationFrame(speakingVisualizerRAF);
+  const voiceOrb = document.getElementById('voiceOrb');
+  const orbAura = document.getElementById('orbAuraGlow');
+  let t = 0;
+
+  function pulse() {
+    if (!isSpeaking) {
+      resetOrbAmplitude();
+      return;
+    }
+    t += 0.05;
+    const amp = 0.5 + 0.5 * Math.sin(t);
+    const scale = 1 + amp * 0.08;
+    if (voiceOrb) voiceOrb.style.transform = `scale(${scale.toFixed(3)})`;
+    if (orbAura) {
+      const blur = 46 + amp * 20;
+      orbAura.style.filter = `blur(${blur.toFixed(1)}px) brightness(${(1.15 + amp * 0.45).toFixed(2)})`;
+      orbAura.style.opacity = (0.85 + amp * 0.15).toFixed(2);
+    }
+    speakingVisualizerRAF = requestAnimationFrame(pulse);
+  }
+  pulse();
+}
+
+function resetOrbAmplitude() {
+  const voiceOrb = document.getElementById('voiceOrb');
+  const orbAura = document.getElementById('orbAuraGlow');
+  const wrapper = document.getElementById('voiceOrbWrapper');
+  if (voiceOrb) voiceOrb.style.transform = '';
+  if (orbAura) {
+    orbAura.style.filter = '';
+    orbAura.style.opacity = '';
+  }
+  if (wrapper) wrapper.classList.remove('user-speaking');
+}
+
+function stopOrbVisualizer() {
+  if (speakingVisualizerRAF) {
+    cancelAnimationFrame(speakingVisualizerRAF);
+    speakingVisualizerRAF = null;
+  }
+  if (userSpeakingTimeout) {
+    clearTimeout(userSpeakingTimeout);
+    userSpeakingTimeout = null;
+  }
+  resetOrbAmplitude();
+}
 
 // DOM Elements
 const sidebar = document.getElementById('sidebar');
@@ -310,7 +391,14 @@ function setVoiceLifecycle(stage, subtitleText = '') {
 function updateSpeakingStateUI(active) {
   if (active) {
     setVoiceLifecycle('speaking');
+    // Start dynamic speaking pulse on the orb
+    if (isVoiceCallActive) startSpeakingOrbPulse();
   } else {
+    // Stop speaking pulse
+    if (speakingVisualizerRAF) {
+      cancelAnimationFrame(speakingVisualizerRAF);
+      speakingVisualizerRAF = null;
+    }
     if (isVoiceCallActive) {
       if (isListening) {
         setVoiceLifecycle('listening');
@@ -428,6 +516,30 @@ function initSpeechRecognition() {
     }
   };
 
+  speechRecognition.onsoundstart = () => {
+    if (isVoiceCallActive && isListening && !isSpeaking) {
+      setOrbUserSpeaking(true);
+    }
+  };
+
+  speechRecognition.onspeechstart = () => {
+    if (isVoiceCallActive && isListening && !isSpeaking) {
+      setOrbUserSpeaking(true);
+    }
+  };
+
+  speechRecognition.onspeechend = () => {
+    if (isVoiceCallActive) {
+      setOrbUserSpeaking(false);
+    }
+  };
+
+  speechRecognition.onsoundend = () => {
+    if (isVoiceCallActive) {
+      setOrbUserSpeaking(false);
+    }
+  };
+
   speechRecognition.onresult = (event) => {
     let final = '';
     let interim = '';
@@ -452,6 +564,7 @@ function initSpeechRecognition() {
     currentRecognizedSpeech = liveText;
 
     if (isVoiceCallActive) {
+      setOrbUserSpeaking(true);
       voiceUserTranscript.textContent = `"${currentRecognizedSpeech}"`;
       
       const soundwave = document.getElementById('voiceSoundwaveBars');
@@ -470,6 +583,7 @@ function initSpeechRecognition() {
       // Auto-process once silence is detected for 1800ms
       speechSilenceTimeout = setTimeout(() => {
         if (soundwave) soundwave.classList.remove('active');
+        setOrbUserSpeaking(false);
         commitSpeechSubmission();
       }, SILENCE_TIMEOUT_MS);
     } else {
@@ -492,16 +606,75 @@ function initSpeechRecognition() {
     console.warn('SpeechRecognition error:', event.error);
     const soundwave = document.getElementById('voiceSoundwaveBars');
     if (soundwave) soundwave.classList.remove('active');
+    setOrbUserSpeaking(false);
 
-    if (event.error !== 'no-speech') {
-      stopListening();
+    if (event.error === 'no-speech') {
+      // Just normal pause in conversation, do not stop listening
+      return;
     }
+
+    if (event.error === 'aborted') {
+      // Temporary interruption, restart smoothly if voice call is active
+      if (isVoiceCallActive && !isSpeaking && !isProcessingVoice) {
+        setTimeout(() => {
+          if (isVoiceCallActive && !isSpeaking && !isProcessingVoice) {
+            startListening();
+          }
+        }, 200);
+      }
+      return;
+    }
+
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+      const msg = 'Izin mikrofon belum diberikan atau diblokir. Harap izinkan akses mikrofon di ikon browser Anda.';
+      if (isVoiceCallActive) {
+        setVoiceLifecycle('idle', msg);
+        if (voiceAiTranscript) voiceAiTranscript.textContent = `⚠️ ${msg}`;
+      } else {
+        speechPreviewText.textContent = `⚠️ ${msg}`;
+      }
+      stopListening();
+      return;
+    }
+
+    if (event.error === 'network' || event.error === 'service-not-allowed') {
+      console.warn('SpeechRecognition network/service issue, switching to Media Voice Recording...');
+      if (isVoiceCallActive && !isSpeaking && !isProcessingVoice) {
+        stopListening();
+        startMediaVoiceRecording();
+        return;
+      }
+      const msg = 'Koneksi jaringan terputus untuk Speech Recognition.';
+      if (isVoiceCallActive) {
+        setVoiceLifecycle('idle', msg);
+      }
+      stopListening();
+      return;
+    }
+
+    if (event.error === 'audio-capture') {
+      const msg = 'Mikrofon tidak terdeteksi atau sedang dipakai aplikasi lain.';
+      if (isVoiceCallActive) {
+        setVoiceLifecycle('idle', msg);
+      }
+      stopListening();
+      return;
+    }
+
+    if (isVoiceCallActive && !isSpeaking && !isProcessingVoice) {
+      stopListening();
+      startMediaVoiceRecording();
+      return;
+    }
+
+    stopListening();
   };
 
   speechRecognition.onend = () => {
     isListening = false;
     micBtn.classList.remove('active');
     callMicToggleBtn.classList.remove('active');
+    setOrbUserSpeaking(false);
     const soundwave = document.getElementById('voiceSoundwaveBars');
     if (soundwave) soundwave.classList.remove('active');
 
@@ -580,7 +753,9 @@ async function fetchSystemStatus() {
 
 async function loadConversations() {
   try {
-    const res = await fetch('/api/conversations');
+    const res = await fetch('/api/conversations', {
+      headers: { 'x-user-id': currentUserId }
+    });
     conversations = await res.json();
     renderConversationsList();
   } catch (err) {
@@ -657,9 +832,12 @@ async function selectConversation(id, title) {
 }
 
 async function deleteConversation(id) {
-  if (!confirm('Apakah Anda yakin ingin menghapus sesi obrolan ini dari database?')) return;
+  if (!confirm('Apakah Anda yakin ingin menghapus sesi obrolan ini?')) return;
   try {
-    await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+    await fetch(`/api/conversations/${id}`, {
+      method: 'DELETE',
+      headers: { 'x-user-id': currentUserId }
+    });
     conversations = conversations.filter(c => c.id !== id);
     if (currentConversationId === id) {
       startNewChat();
@@ -1049,9 +1227,13 @@ async function handleSendMessage(text) {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId
+      },
       body: JSON.stringify({
         conversationId: currentConversationId,
+        userId: currentUserId,
         message,
         model: modelSelect.value,
         webSearch: isWebSearchActive
@@ -1081,22 +1263,485 @@ async function handleSendMessage(text) {
   }
 }
 
+// === Universal MediaRecorder Multimodal Voice Engine (Firefox, Safari, & Fallback) ===
+let mediaRecorder = null;
+let mediaRecorderStream = null;
+let recordedAudioChunks = [];
+let mediaRecorderMimeType = 'audio/webm';
+let vadAudioContext = null;
+let vadSource = null;
+let vadAnalyser = null;
+let vadRAF = null;
+let vadSilenceTimer = null;
+let hasSpokenInRecording = false;
+let isRecordingMedia = false;
+
+function hasNativeSTT() {
+  // Safari's webkitSpeechRecognition is brittle with continuous speech,
+  // requires macOS Dictation to be enabled in System Settings, and halts on auto-restart.
+  // Safari and Firefox both provide first-class native MediaRecorder with Gemini Multimodal Voice!
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  if (isSafari) return false;
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function ensureAudioContextRunning() {
+  try {
+    if (!vadAudioContext) {
+      vadAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (vadAudioContext.state === 'suspended') {
+      vadAudioContext.resume();
+    }
+  } catch (e) {
+    console.warn('AudioContext init error:', e);
+  }
+}
+
+let vadHighpass = null;
+let vadLowpass = null;
+
+function startVADAudioVisualizer(stream) {
+  try {
+    ensureAudioContextRunning();
+
+    if (vadSource) {
+      try { vadSource.disconnect(); } catch (_) {}
+      vadSource = null;
+    }
+    if (vadHighpass) {
+      try { vadHighpass.disconnect(); } catch (_) {}
+      vadHighpass = null;
+    }
+    if (vadLowpass) {
+      try { vadLowpass.disconnect(); } catch (_) {}
+      vadLowpass = null;
+    }
+
+    vadSource = vadAudioContext.createMediaStreamSource(stream);
+
+    // 1. Highpass filter @ 160Hz: completely cuts off laptop chassis vibration & low fan motor hum (<160Hz)
+    vadHighpass = vadAudioContext.createBiquadFilter();
+    vadHighpass.type = 'highpass';
+    vadHighpass.frequency.value = 160;
+
+    // 2. Lowpass filter @ 3500Hz: cuts off high-frequency air hiss and typing clicks (>3500Hz)
+    vadLowpass = vadAudioContext.createBiquadFilter();
+    vadLowpass.type = 'lowpass';
+    vadLowpass.frequency.value = 3500;
+
+    vadAnalyser = vadAudioContext.createAnalyser();
+    vadAnalyser.fftSize = 256;
+    vadAnalyser.smoothingTimeConstant = 0.45;
+
+    // Connect source -> highpass -> lowpass -> analyser
+    vadSource.connect(vadHighpass);
+    vadHighpass.connect(vadLowpass);
+    vadLowpass.connect(vadAnalyser);
+
+    const freqData = new Uint8Array(vadAnalyser.frequencyBinCount);
+    const timeData = new Uint8Array(vadAnalyser.fftSize);
+    const voiceOrb = document.getElementById('voiceOrb');
+    const orbAura = document.getElementById('orbAuraGlow');
+
+    if (vadRAF) {
+      cancelAnimationFrame(vadRAF);
+      vadRAF = null;
+    }
+
+    let consecutiveSpeechFrames = 0;
+    let hasSpokenInThisTurn = false;
+    let lastSpokenTime = 0;
+    let isSubmittingThisTurn = false;
+    // Dynamic noise floor tracking: adapts to laptop fan noise in real time
+    let dynamicNoiseFloor = 0.014;
+
+    function checkAudio() {
+      if (!isRecordingMedia || !isVoiceCallActive || isSubmittingThisTurn) {
+        resetOrbAmplitude();
+        return;
+      }
+
+      vadAnalyser.getByteFrequencyData(freqData);
+      vadAnalyser.getByteTimeDomainData(timeData);
+
+      // Measure isolated vocal formants (bins 2 to 22 correspond to ~180Hz - 3800Hz)
+      let voiceSum = 0;
+      let voicePeak = 0;
+      const binStart = 2;
+      const binEnd = Math.min(22, freqData.length);
+      for (let i = binStart; i <= binEnd; i++) {
+        const val = freqData[i];
+        voiceSum += val;
+        if (val > voicePeak) voicePeak = val;
+      }
+      const voiceAvg = voiceSum / (binEnd - binStart + 1);
+
+      // Measure RMS volume
+      let rmsSum = 0;
+      for (let i = 0; i < timeData.length; i++) {
+        const val = (timeData[i] - 128) / 128;
+        rmsSum += val * val;
+      }
+      const rms = Math.sqrt(rmsSum / timeData.length); // 0..1
+
+      // Adaptively track laptop fan noise floor when quiet
+      if (rms < dynamicNoiseFloor * 1.8) {
+        dynamicNoiseFloor = dynamicNoiseFloor * 0.95 + rms * 0.05;
+      }
+
+      // Voice is detected ONLY when volume distinctly exceeds the fan noise floor!
+      const speechRmsThreshold = Math.max(0.024, dynamicNoiseFloor * 2.3);
+      const isVoiceActive = rms > speechRmsThreshold && (voicePeak > 20 || voiceAvg > 7);
+
+      const voiceNorm = Math.min(Math.max((rms - dynamicNoiseFloor) * 4.5, voiceAvg / 75), 1);
+      const isEn = currentSpeechLang.startsWith('en');
+
+      if (isVoiceActive) {
+        consecutiveSpeechFrames++;
+        if (consecutiveSpeechFrames >= 2) {
+          hasSpokenInThisTurn = true;
+          hasSpokenInRecording = true;
+          lastSpokenTime = Date.now();
+
+          setOrbUserSpeaking(true);
+          const soundwave = document.getElementById('voiceSoundwaveBars');
+          if (soundwave) soundwave.classList.add('active');
+
+          // Dynamic crystal sphere pulse reacting to user's real voice
+          const scale = 1 + Math.min(voiceNorm * 0.18, 0.22);
+          if (voiceOrb) voiceOrb.style.transform = `scale(${scale.toFixed(3)})`;
+          if (orbAura) {
+            const blur = 44 + voiceNorm * 30;
+            orbAura.style.filter = `blur(${blur.toFixed(1)}px) brightness(${(1.2 + voiceNorm * 0.6).toFixed(2)})`;
+            orbAura.style.opacity = (0.82 + voiceNorm * 0.18).toFixed(2);
+          }
+
+          if (voiceUserTranscript && (!voiceUserTranscript.textContent || voiceUserTranscript.textContent.includes('...'))) {
+            voiceUserTranscript.textContent = isEn ? '🎙️ Listening to your words...' : '🎙️ Mendengarkan ucapan Anda...';
+          }
+          voiceStatusSub.textContent = isEn 
+            ? 'Speaking... (pause to auto-answer)' 
+            : 'Sedang berbicara... (berhenti bicara untuk otomatis dijawab)';
+        }
+      } else {
+        // Quiet frame (laptop fan noise ignored)
+        consecutiveSpeechFrames = 0;
+        setOrbUserSpeaking(false);
+        const soundwave = document.getElementById('voiceSoundwaveBars');
+        if (soundwave) soundwave.classList.remove('active');
+
+        // Check for silence after user has spoken
+        if (hasSpokenInThisTurn && lastSpokenTime > 0) {
+          const silenceDuration = Date.now() - lastSpokenTime;
+
+          if (silenceDuration >= 350) {
+            voiceStatusSub.textContent = isEn 
+              ? 'Silence detected... formulating response' 
+              : 'Jeda hening terdeteksi... bersiap menjawab';
+          }
+
+          // AUTOMATIC SWITCH TO THINKING AFTER 1.2 SECONDS OF SILENCE!
+          if (silenceDuration >= 1200 && !isSubmittingThisTurn) {
+            isSubmittingThisTurn = true;
+            stopMediaVoiceRecordingAndSubmit();
+            return;
+          }
+        }
+      }
+
+      vadRAF = requestAnimationFrame(checkAudio);
+    }
+
+    checkAudio();
+  } catch (err) {
+    console.warn('VAD Audio Error:', err);
+  }
+}
+
+async function startMediaVoiceRecording() {
+  if (isSpeaking || isProcessingVoice) return;
+  stopSpeaking();
+  recordedAudioChunks = [];
+  hasSpokenInRecording = false;
+
+  try {
+    ensureAudioContextRunning();
+
+    if (!mediaRecorderStream || !mediaRecorderStream.active) {
+      // Hardware DSP filters: actively suppress laptop fan noise, acoustic echo, and automatic gain
+      mediaRecorderStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1
+        }
+      });
+    }
+
+    let mimeType = 'audio/webm';
+    if (!MediaRecorder.isTypeSupported('audio/webm')) {
+      if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+      else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) mimeType = 'audio/ogg;codecs=opus';
+      else mimeType = '';
+    }
+    mediaRecorderMimeType = mimeType || 'audio/webm';
+
+    mediaRecorder = new MediaRecorder(mediaRecorderStream, mimeType ? { mimeType } : undefined);
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) {
+        recordedAudioChunks.push(e.data);
+      }
+    };
+
+    mediaRecorder.start(200);
+    isRecordingMedia = true;
+    isListening = true;
+    callMicToggleBtn.classList.add('active');
+
+    const isEn = currentSpeechLang.startsWith('en');
+    setVoiceLifecycle('listening', isEn 
+      ? 'Listening... (Speak naturally, silence will auto-send)' 
+      : 'Mendengarkan... (Silakan bicara santai, jeda hening akan otomatis dijawab)');
+
+    startVADAudioVisualizer(mediaRecorderStream);
+  } catch (err) {
+    console.error('Mic Access Error:', err);
+    setVoiceLifecycle('idle', 'Gagal mengakses mikrofon.');
+    if (voiceAiTranscript) {
+      voiceAiTranscript.textContent = '⚠️ Akses mikrofon ditolak atau tidak tersedia. Harap izinkan akses mikrofon di ikon gembok browser Anda.';
+    }
+  }
+}
+
+function stopMediaVoiceRecordingAndSubmit() {
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+
+  if (vadSilenceTimer) {
+    clearTimeout(vadSilenceTimer);
+    vadSilenceTimer = null;
+  }
+  if (vadRAF) {
+    cancelAnimationFrame(vadRAF);
+    vadRAF = null;
+  }
+
+  isRecordingMedia = false;
+  isListening = false;
+  callMicToggleBtn.classList.remove('active');
+  setOrbUserSpeaking(false);
+  resetOrbAmplitude();
+
+  const isEn = currentSpeechLang.startsWith('en');
+  setVoiceLifecycle('thinking', isEn ? 'Sona is listening & analyzing...' : 'Sedang mendengarkan & merangkai jawaban...');
+
+  voiceAiTranscript.innerHTML = `
+    <div class="thinking-status-row">
+      <span class="thinking-label">${isEn ? 'Sona is analyzing your voice' : 'Sona sedang memproses suara Anda'}</span>
+      <span class="dot-typing"><span>.</span><span>.</span><span>.</span></span>
+    </div>
+  `;
+
+  mediaRecorder.onstop = async () => {
+    const audioBlob = new Blob(recordedAudioChunks, { type: mediaRecorderMimeType });
+    recordedAudioChunks = [];
+
+    if (audioBlob.size < 600) {
+      // Too short / empty click
+      if (isVoiceCallActive) {
+        setVoiceLifecycle('listening', isEn ? 'Speak again anytime...' : 'Suara terlalu singkat, silakan bicara lagi...');
+        setTimeout(() => {
+          if (isVoiceCallActive && !isSpeaking && !isProcessingVoice) {
+            startMediaVoiceRecording();
+          }
+        }, 400);
+      }
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const base64Data = reader.result.split(',')[1];
+      await handleMediaVoiceSubmit(base64Data, audioBlob.type || mediaRecorderMimeType);
+    };
+    reader.readAsDataURL(audioBlob);
+  };
+
+  try {
+    mediaRecorder.stop();
+  } catch (_) {}
+}
+
+async function handleMediaVoiceSubmit(audioBase64, mimeType) {
+  isProcessingVoice = true;
+  const isEn = currentSpeechLang.startsWith('en');
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId
+      },
+      body: JSON.stringify({
+        conversationId: currentConversationId,
+        userId: currentUserId,
+        audioBase64,
+        audioMimeType: mimeType,
+        model: modelSelect.value,
+        language: currentSpeechLang
+      })
+    });
+
+    const data = await res.json();
+    if (data.error) {
+      voiceAiTranscript.textContent = `⚠️ ${data.error}`;
+      setVoiceLifecycle('idle', `Error: ${data.error}`);
+      isProcessingVoice = false;
+      return;
+    }
+
+    currentConversationId = data.conversationId;
+
+    // Display user's exact words on the Voice Call screen
+    if (data.userTranscription && data.userTranscription.trim()) {
+      voiceUserTranscript.textContent = `"${data.userTranscription.trim()}"`;
+    }
+
+    if (window.marked) {
+      voiceAiTranscript.innerHTML = marked.parse(data.reply);
+    } else {
+      voiceAiTranscript.textContent = data.reply;
+    }
+    voiceAiTranscript.scrollTop = 0;
+
+    // Stage 3: SPEAKING
+    setVoiceLifecycle('speaking', isEn ? 'Sona is speaking...' : 'Sona Menjawab...');
+
+    speakText(data.reply, () => {
+      isProcessingVoice = false;
+      if (isVoiceCallActive) {
+        setVoiceLifecycle('listening', isEn ? 'Listening... speak anytime' : 'Silakan bicara lagi, Sona siap mendengar...');
+        if (voiceUserTranscript) voiceUserTranscript.textContent = '';
+        setTimeout(() => {
+          if (isVoiceCallActive && !isSpeaking && !isProcessingVoice) {
+            startMediaVoiceRecording();
+          }
+        }, 300);
+      } else {
+        setVoiceLifecycle('idle');
+      }
+    });
+
+    // Also sync with the main chat stream with transcribed text
+    const userBubbleText = (data.userTranscription && data.userTranscription.trim())
+      ? `🎙️ "${data.userTranscription.trim()}"`
+      : '🎙️ [Pesan Suara]';
+    appendMessageToStream('user', userBubbleText, false);
+    appendMessageToStream('model', data.reply, false);
+    loadConversations();
+  } catch (err) {
+    voiceAiTranscript.textContent = `Gagal mengirim suara: ${err.message}`;
+    setVoiceLifecycle('idle', 'Koneksi bermasalah.');
+    isProcessingVoice = false;
+  }
+}
+
+function stopMediaRecording() {
+  if (vadSilenceTimer) {
+    clearTimeout(vadSilenceTimer);
+    vadSilenceTimer = null;
+  }
+  if (vadRAF) {
+    cancelAnimationFrame(vadRAF);
+    vadRAF = null;
+  }
+  if (vadSource) {
+    try { vadSource.disconnect(); } catch (_) {}
+    vadSource = null;
+  }
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    try { mediaRecorder.stop(); } catch (_) {}
+  }
+  if (mediaRecorderStream) {
+    try {
+      mediaRecorderStream.getTracks().forEach(t => t.stop());
+    } catch (_) {}
+    mediaRecorderStream = null;
+  }
+  isRecordingMedia = false;
+  recordedAudioChunks = [];
+}
+
+async function handleSendAudioMessage(audioBase64, mimeType) {
+  sendBtn.disabled = true;
+  appendMessageToStream('user', '🎙️ [Pesan Suara]', false);
+  const loadingRow = appendLoadingIndicator();
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId
+      },
+      body: JSON.stringify({
+        conversationId: currentConversationId,
+        userId: currentUserId,
+        audioBase64,
+        audioMimeType: mimeType,
+        model: modelSelect.value,
+        language: currentSpeechLang
+      })
+    });
+    const data = await res.json();
+    loadingRow.remove();
+
+    if (data.error) {
+      appendMessageToStream('model', `⚠️ Error: ${data.error}`, false);
+      return;
+    }
+    currentConversationId = data.conversationId;
+    const shouldSpeak = autoSpeakCheck && autoSpeakCheck.checked;
+    appendMessageToStream('model', data.reply, shouldSpeak, data.sources, true);
+    await loadConversations();
+  } catch (err) {
+    loadingRow.remove();
+    appendMessageToStream('model', `⚠️ Gagal terhubung ke server: ${err.message}`, false);
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
 // 5. Voice Call Mode Handler
 function openVoiceCall() {
   isVoiceCallActive = true;
   isProcessingVoice = false;
   currentRecognizedSpeech = '';
+  accumulatedSpeech = '';
   voiceCallOverlay.classList.remove('hidden');
   updateSpeechLangUI();
   const isEn = currentSpeechLang.startsWith('en');
-  setVoiceLifecycle('listening', isEn 
-    ? 'Listening... pause speaking to process answer' 
-    : 'Silakan bicara, jeda hening akan otomatis memproses');
+
   voiceAiTranscript.textContent = isEn 
     ? '"Hello! I am SonaAI, how can I help you today?"' 
     : '"Halo! Saya SonaAI, mari mengobrol..."';
   voiceUserTranscript.textContent = '';
-  startListening();
+
+  if (hasNativeSTT()) {
+    setVoiceLifecycle('listening', isEn 
+      ? 'Listening... pause speaking to process answer' 
+      : 'Silakan bicara, jeda hening akan otomatis memproses');
+    startListening();
+  } else {
+    // Safari, Firefox, & Modern Multimodal MediaRecorder Voice Mode
+    setVoiceLifecycle('listening', isEn
+      ? 'Listening... (Speak naturally, silence will auto-send)'
+      : 'Mendengarkan... (Silakan bicara santai, jeda hening / ketuk bola kristal untuk kirim)');
+    startMediaVoiceRecording();
+  }
 }
 
 function closeVoiceCall() {
@@ -1108,7 +1753,9 @@ function closeVoiceCall() {
   }
   voiceCallOverlay.classList.add('hidden');
   stopListening();
+  stopMediaRecording();
   stopSpeaking();
+  stopOrbVisualizer();
   setVoiceLifecycle('idle');
 }
 
@@ -1137,9 +1784,13 @@ async function handleVoiceCallSubmit(userSpeechText) {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId
+      },
       body: JSON.stringify({
         conversationId: currentConversationId,
+        userId: currentUserId,
         message: userSpeechText,
         model: modelSelect.value,
         language: currentSpeechLang
@@ -1243,25 +1894,98 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Mic Button
-  micBtn.addEventListener('click', () => {
-    if (isListening) {
-      stopListening();
+  // Mic Button (Chat Bar Input)
+  let chatMediaRecorder = null;
+  let chatAudioChunks = [];
+  let isChatRecording = false;
+
+  micBtn.addEventListener('click', async () => {
+    if (hasNativeSTT()) {
+      if (isListening) {
+        stopListening();
+      } else {
+        startListening();
+      }
+      return;
+    }
+
+    // Firefox & Fallback Audio Recording Mode
+    if (!isChatRecording) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1
+          }
+        });
+        chatAudioChunks = [];
+        let mimeType = 'audio/webm';
+        if (!MediaRecorder.isTypeSupported('audio/webm')) {
+          if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) mimeType = 'audio/ogg;codecs=opus';
+          else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+          else mimeType = '';
+        }
+        chatMediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        chatMediaRecorder.ondataavailable = e => {
+          if (e.data && e.data.size > 0) chatAudioChunks.push(e.data);
+        };
+        chatMediaRecorder.onstop = () => {
+          stream.getTracks().forEach(t => t.stop());
+          const blob = new Blob(chatAudioChunks, { type: chatMediaRecorder.mimeType || mimeType || 'audio/webm' });
+          if (blob.size > 1200) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const base64Data = reader.result.split(',')[1];
+              handleSendAudioMessage(base64Data, blob.type || 'audio/webm');
+            };
+            reader.readAsDataURL(blob);
+          }
+        };
+        chatMediaRecorder.start();
+        isChatRecording = true;
+        micBtn.classList.add('active');
+        speechPreviewBar.classList.remove('hidden');
+        speechPreviewText.textContent = '🔴 Merekam suara... Klik lagi tombol mic untuk mengirim pesan suara ke Sona';
+      } catch (err) {
+        alert('Gagal mengakses mikrofon di Firefox. Harap izinkan akses mikrofon di ikon gembok Firefox.');
+      }
     } else {
-      startListening();
+      isChatRecording = false;
+      micBtn.classList.remove('active');
+      speechPreviewBar.classList.add('hidden');
+      if (chatMediaRecorder && chatMediaRecorder.state !== 'inactive') {
+        chatMediaRecorder.stop();
+      }
     }
   });
 
   // Voice Call Mode Triggers
-  startVoiceCallBtn.addEventListener('click', openVoiceCall);
+  startVoiceCallBtn.addEventListener('click', () => {
+    ensureAudioContextRunning();
+    openVoiceCall();
+  });
   closeVoiceCallBtn.addEventListener('click', closeVoiceCall);
   callEndBtn.addEventListener('click', closeVoiceCall);
 
   callMicToggleBtn.addEventListener('click', () => {
-    if (isListening) {
-      stopListening();
+    ensureAudioContextRunning();
+    if (hasNativeSTT()) {
+      if (isListening) {
+        stopListening();
+      } else {
+        startListening();
+      }
     } else {
-      startListening();
+      // Safari / Firefox / MediaRecorder
+      if (isRecordingMedia) {
+        stopMediaRecording();
+        setVoiceLifecycle('idle', 'Mikrofon dijeda. Tekan mic untuk mulai bicara lagi.');
+        callMicToggleBtn.classList.remove('active');
+      } else if (!isProcessingVoice && !isSpeaking) {
+        startMediaVoiceRecording();
+      }
     }
   });
 
@@ -1270,10 +1994,16 @@ document.addEventListener('DOMContentLoaded', () => {
     voiceStatusLabel.textContent = 'Suara dihentikan.';
   });
 
-  // Send Now button (Immediate submission without waiting for 2.2s silence)
+  // Send Now button (Immediate submission without waiting for silence)
   const callSendNowBtn = document.getElementById('callSendNowBtn');
   if (callSendNowBtn) {
     callSendNowBtn.addEventListener('click', () => {
+      if (!hasNativeSTT()) {
+        if (isRecordingMedia) {
+          stopMediaVoiceRecordingAndSubmit();
+        }
+        return;
+      }
       if (currentRecognizedSpeech && currentRecognizedSpeech.trim()) {
         commitSpeechSubmission();
       } else {
@@ -1287,9 +2017,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Interactive Orb Click (Tap orb to send now or interrupt)
   if (voiceOrbWrapper) {
     voiceOrbWrapper.addEventListener('click', () => {
+      ensureAudioContextRunning();
       if (isSpeaking) {
         stopSpeaking();
-        startListening();
+        if (hasNativeSTT()) {
+          startListening();
+        } else {
+          startMediaVoiceRecording();
+        }
+      } else if (!hasNativeSTT()) {
+        if (isRecordingMedia) {
+          stopMediaVoiceRecordingAndSubmit();
+        } else if (!isProcessingVoice) {
+          startMediaVoiceRecording();
+        }
       } else if (isListening && currentRecognizedSpeech && currentRecognizedSpeech.trim()) {
         commitSpeechSubmission();
       } else if (!isListening && !isSpeaking && !isProcessingVoice) {

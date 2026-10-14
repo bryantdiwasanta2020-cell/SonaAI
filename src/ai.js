@@ -30,14 +30,16 @@ Kamu di Buat Oleh Bryant`;
 
 export async function generateChatResponse({
   prompt,
+  audioBase64 = null,
+  audioMimeType = null,
   history = [],
-  model = 'gemini-3.1-flash-lite',
+  model = 'gemini-3.5-flash-lite',
   apiKey = null,
   webSearch = false,
   language = null
 }) {
   const activeKey = apiKey || getApiKey();
-  const targetModel = model || 'gemini-3.1-flash-lite';
+  const targetModel = model || 'gemini-3.5-flash-lite';
 
   if (!activeKey || !activeKey.trim()) {
     return {
@@ -61,10 +63,34 @@ export async function generateChatResponse({
       });
     }
 
-    // Append current user prompt
+    // Append current user prompt or audio
+    const userParts = [];
+    if (audioBase64) {
+      userParts.push({
+        inlineData: {
+          mimeType: audioMimeType || 'audio/webm',
+          data: audioBase64
+        }
+      });
+      if (prompt && prompt.trim()) {
+        userParts.push({ text: prompt });
+      } else {
+        userParts.push({
+          text: `Dengarkan rekaman suara pengguna ini dengan teliti.
+FORMAT OUTPUT (WAJIB DIIKUTI):
+---TRANSKRIPSI---
+[Tuliskan transkripsi persis kata demi kata dari apa yang diucapkan pengguna]
+---JAWABAN---
+[Tuliskan jawaban lengkapmu atas ucapan atau pertanyaan pengguna tersebut]`
+        });
+      }
+    } else {
+      userParts.push({ text: prompt || '' });
+    }
+
     formattedContents.push({
       role: 'user',
-      parts: [{ text: prompt }]
+      parts: userParts
     });
 
     // Build configuration with optional Google Search Grounding
@@ -138,41 +164,56 @@ export async function generateChatResponse({
       }
     };
 
+    const parseTranscriptionAndAnswer = (rawText) => {
+      let replyText = rawText || 'Maaf, SonaAI tidak dapat menghasilkan respon.';
+      let userTranscription = '';
+
+      if (replyText.includes('---JAWABAN---')) {
+        const parts = replyText.split('---JAWABAN---');
+        userTranscription = parts[0].replace('---TRANSKRIPSI---', '').trim();
+        replyText = parts[1] ? parts[1].trim() : replyText;
+      } else if (replyText.includes('---TRANSKRIPSI---')) {
+        const parts = replyText.split('---TRANSKRIPSI---');
+        replyText = (parts[0] || parts[1] || '').trim();
+      }
+
+      return { replyText, userTranscription };
+    };
+
     try {
       const response = await fetchWithRetry(targetModel, 25000);
-      const replyText = response.text || 'Maaf, SonaAI tidak dapat menghasilkan respon.';
+      const parsed = parseTranscriptionAndAnswer(response.text);
       const grounding = extractGrounding(response);
       return {
-        text: replyText,
+        text: parsed.replyText,
+        userTranscription: parsed.userTranscription,
         model: targetModel,
         isDemo: false,
         sources: grounding.sources,
         queries: grounding.queries
       };
     } catch (err) {
-      if (targetModel !== 'gemini-3.1-flash-lite') {
-        console.log(`⚡ Beralih cepat ke gemini-3.1-flash-lite karena ${targetModel} lambat/sibuk: ${err.message}`);
-        const fallbackResponse = await fetchWithRetry('gemini-3.1-flash-lite', 25000, 1);
-        const grounding = extractGrounding(fallbackResponse);
-        return {
-          text: fallbackResponse.text || 'Maaf, SonaAI tidak dapat menghasilkan respon.',
-          model: 'gemini-3.1-flash-lite',
-          isDemo: false,
-          sources: grounding.sources,
-          queries: grounding.queries
-        };
-      } else {
-        console.log(`⚡ Beralih ke gemini-3.5-flash karena gemini-3.1-flash-lite sibuk: ${err.message}`);
-        const fallbackResponse = await fetchWithRetry('gemini-3.5-flash', 25000, 1);
-        const grounding = extractGrounding(fallbackResponse);
-        return {
-          text: fallbackResponse.text || 'Maaf, SonaAI tidak dapat menghasilkan respon.',
-          model: 'gemini-3.5-flash',
-          isDemo: false,
-          sources: grounding.sources,
-          queries: grounding.queries
-        };
+      const fallbackModels = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-3.5-flash'];
+      for (const altModel of fallbackModels) {
+        if (altModel === targetModel) continue;
+        try {
+          console.log(`⚡ Mencoba model cadangan ${altModel}...`);
+          const fallbackResponse = await fetchWithRetry(altModel, 25000, 1);
+          const parsed = parseTranscriptionAndAnswer(fallbackResponse.text);
+          const grounding = extractGrounding(fallbackResponse);
+          return {
+            text: parsed.replyText,
+            userTranscription: parsed.userTranscription,
+            model: altModel,
+            isDemo: false,
+            sources: grounding.sources,
+            queries: grounding.queries
+          };
+        } catch (altErr) {
+          console.warn(`Model ${altModel} gagal:`, altErr.message);
+        }
       }
+      throw err;
     }
   } catch (error) {
     console.error('❌ [AI Generation Error]:', error);

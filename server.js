@@ -24,7 +24,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Initialize DB with env var if available
@@ -75,10 +76,14 @@ app.post('/api/settings', async (req, res) => {
   });
 });
 
+// Helper to extract userId from request
+const getUserId = (req) => req.headers['x-user-id'] || req.query.userId || req.body?.userId || null;
+
 // 3. Conversations List
 app.get('/api/conversations', async (req, res) => {
   try {
-    const list = await getConversations();
+    const userId = getUserId(req);
+    const list = await getConversations(userId);
     res.json(list);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -89,8 +94,9 @@ app.get('/api/conversations', async (req, res) => {
 app.post('/api/conversations', async (req, res) => {
   try {
     const { title = 'Obrolan Baru', model = 'gemini-3.8-flash' } = req.body;
+    const userId = getUserId(req);
     const id = 'conv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-    const conv = await createConversation(id, title, model);
+    const conv = await createConversation(id, title, model, userId);
     res.json(conv);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -101,7 +107,8 @@ app.post('/api/conversations', async (req, res) => {
 app.delete('/api/conversations/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    await deleteConversation(id);
+    const userId = getUserId(req);
+    await deleteConversation(id, userId);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -122,49 +129,81 @@ app.get('/api/conversations/:id/messages', async (req, res) => {
 // 7. Chat Endpoint
 app.post('/api/chat', async (req, res) => {
   try {
-    const { conversationId: rawId, message, model = 'gemini-3.1-flash-lite', webSearch = false, language } = req.body;
+    const {
+      conversationId: rawId,
+      message,
+      audioBase64,
+      audioMimeType,
+      model = 'gemini-3.5-flash-lite',
+      webSearch = false,
+      language
+    } = req.body;
 
-    if (!message || !message.trim()) {
-      return res.status(400).json({ error: 'Pesan tidak boleh kosong.' });
+    const hasAudio = !!(audioBase64 && audioBase64.trim());
+    const hasText = !!(message && message.trim());
+
+    if (!hasText && !hasAudio) {
+      return res.status(400).json({ error: 'Pesan atau rekaman suara tidak boleh kosong.' });
     }
 
     let conversationId = rawId;
     let isNewConv = false;
+    const userId = getUserId(req);
+
+    const summaryText = hasText ? message : '🎙️ Pesan Suara';
+    const displayMsg = hasText ? message : '🎙️ [Pesan Suara Dikirimkan]';
 
     if (!conversationId) {
       conversationId = 'conv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-      const titleSummary = message.length > 28 ? message.substring(0, 28) + '...' : message;
-      await createConversation(conversationId, titleSummary, model);
+      const titleSummary = summaryText.length > 28 ? summaryText.substring(0, 28) + '...' : summaryText;
+      await createConversation(conversationId, titleSummary, model, userId);
       isNewConv = true;
     }
 
     // Save user message to SQL DB
-    const userMsg = await addMessage(conversationId, 'user', message);
+    const userMsg = await addMessage(conversationId, 'user', displayMsg);
 
     // Get message history for context
     const history = await getMessages(conversationId);
 
     // Call Gemini AI
     const aiResult = await generateChatResponse({
-      prompt: message,
+      prompt: message || '',
+      audioBase64,
+      audioMimeType,
       history: history.slice(0, -1), // exclude the one we just added to avoid duplicate prompt
       model,
       webSearch: !!webSearch,
       language
     });
 
+    // If audio was transcribed, update user message in DB with actual words
+    let effectiveUserContent = displayMsg;
+    if (hasAudio && aiResult.userTranscription && aiResult.userTranscription.trim()) {
+      effectiveUserContent = `🎙️ "${aiResult.userTranscription.trim()}"`;
+      try {
+        const pool = (await import('./src/db.js')).pool;
+        if (pool) {
+          await pool.query('UPDATE messages SET content = $1 WHERE id = $2', [effectiveUserContent, userMsg.id]);
+          userMsg.content = effectiveUserContent;
+        }
+      } catch (_) {}
+    }
+
     // Save AI reply to SQL DB
     const aiMsg = await addMessage(conversationId, 'model', aiResult.text);
 
     // If first message in an existing conversation with generic title, update title
-    if (!isNewConv && history.length <= 2) {
-      const titleSummary = message.length > 28 ? message.substring(0, 28) + '...' : message;
+    const resolvedSummary = (hasAudio && aiResult.userTranscription) ? aiResult.userTranscription : summaryText;
+    if (history.length <= 2 || isNewConv) {
+      const titleSummary = resolvedSummary.length > 28 ? resolvedSummary.substring(0, 28) + '...' : resolvedSummary;
       await updateConversationTitle(conversationId, titleSummary);
     }
 
     res.json({
       conversationId,
       userMessage: userMsg,
+      userTranscription: aiResult.userTranscription || '',
       reply: aiResult.text,
       modelUsed: aiResult.model || model,
       aiMessage: aiMsg,
