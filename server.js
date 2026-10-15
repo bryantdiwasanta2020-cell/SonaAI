@@ -11,9 +11,18 @@ import {
   updateConversationTitle,
   deleteConversation,
   getMessages,
-  addMessage
+  addMessage,
+  updateMessageContent
 } from './src/db.js';
-import { generateChatResponse, setApiKey, getApiKey } from './src/ai.js';
+import {
+  generateChatResponse,
+  setApiKey,
+  getApiKey,
+  setGroqApiKey,
+  getGroqApiKey,
+  setOpenRouterApiKey,
+  getOpenRouterApiKey
+} from './src/ai.js';
 
 dotenv.config();
 
@@ -28,8 +37,8 @@ app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Initialize DB with env var if available
-await initDB();
+// Initialize DB asynchronously in background without blocking server startup
+initDB().catch(err => console.warn('⚠️  [DB Warning]', err.message));
 
 // Helper to mask API key for safe UI display
 function maskKey(key) {
@@ -39,19 +48,24 @@ function maskKey(key) {
 
 // 1. System Status
 app.get('/api/status', (req, res) => {
-  const currentKey = getApiKey();
+  const geminiKey = getApiKey();
+  const groqKey = getGroqApiKey();
+  const openrouterKey = getOpenRouterApiKey();
   res.json({
     db: getDBStatus(),
     ai: {
-      hasKey: !!(currentKey && currentKey.trim()),
-      maskedKey: maskKey(currentKey)
+      hasKey: !!(geminiKey && geminiKey.trim()),
+      maskedKey: maskKey(geminiKey),
+      gemini: { hasKey: !!(geminiKey && geminiKey.trim()), maskedKey: maskKey(geminiKey) },
+      groq: { hasKey: !!(groqKey && groqKey.trim()), maskedKey: maskKey(groqKey) },
+      openrouter: { hasKey: !!(openrouterKey && openrouterKey.trim()), maskedKey: maskKey(openrouterKey) }
     }
   });
 });
 
-// 2. Update Settings (Supabase Connection / Gemini API Key)
+// 2. Update Settings (Supabase / Gemini / Groq / OpenRouter Keys)
 app.post('/api/settings', async (req, res) => {
-  const { geminiApiKey, databaseUrl } = req.body;
+  const { geminiApiKey, groqApiKey, openrouterApiKey, databaseUrl } = req.body;
 
   let dbResult = null;
   if (databaseUrl !== undefined) {
@@ -65,13 +79,26 @@ app.post('/api/settings', async (req, res) => {
   if (geminiApiKey !== undefined) {
     setApiKey(geminiApiKey);
   }
+  if (groqApiKey !== undefined) {
+    setGroqApiKey(groqApiKey);
+  }
+  if (openrouterApiKey !== undefined) {
+    setOpenRouterApiKey(openrouterApiKey);
+  }
+
+  const gKey = getApiKey();
+  const grqKey = getGroqApiKey();
+  const orKey = getOpenRouterApiKey();
 
   res.json({
     message: 'Pengaturan berhasil diperbarui!',
     db: dbResult || getDBStatus(),
     ai: {
-      hasKey: !!getApiKey(),
-      maskedKey: maskKey(getApiKey())
+      hasKey: !!gKey,
+      maskedKey: maskKey(gKey),
+      gemini: { hasKey: !!gKey, maskedKey: maskKey(gKey) },
+      groq: { hasKey: !!grqKey, maskedKey: maskKey(grqKey) },
+      openrouter: { hasKey: !!orKey, maskedKey: maskKey(orKey) }
     }
   });
 });
@@ -166,13 +193,20 @@ app.post('/api/chat', async (req, res) => {
     // Get message history for context
     const history = await getMessages(conversationId);
 
-    // Call Gemini AI
+    const apiKey = req.body.apiKey || req.headers['x-gemini-key'];
+    const groqApiKey = req.body.groqApiKey || req.headers['x-groq-key'];
+    const openrouterApiKey = req.body.openrouterApiKey || req.headers['x-openrouter-key'];
+
+    // Call Multi-Provider AI (Gemini, Groq, or OpenRouter)
     const aiResult = await generateChatResponse({
       prompt: message || '',
       audioBase64,
       audioMimeType,
       history: history.slice(0, -1), // exclude the one we just added to avoid duplicate prompt
       model,
+      apiKey,
+      groqApiKey,
+      openrouterApiKey,
       webSearch: !!webSearch,
       language
     });
@@ -182,11 +216,8 @@ app.post('/api/chat', async (req, res) => {
     if (hasAudio && aiResult.userTranscription && aiResult.userTranscription.trim()) {
       effectiveUserContent = `🎙️ "${aiResult.userTranscription.trim()}"`;
       try {
-        const pool = (await import('./src/db.js')).pool;
-        if (pool) {
-          await pool.query('UPDATE messages SET content = $1 WHERE id = $2', [effectiveUserContent, userMsg.id]);
-          userMsg.content = effectiveUserContent;
-        }
+        await updateMessageContent(userMsg.id, effectiveUserContent);
+        userMsg.content = effectiveUserContent;
       } catch (_) {}
     }
 

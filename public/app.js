@@ -114,6 +114,8 @@ const webSearchBtn = document.getElementById('webSearchBtn');
 const sendBtn = document.getElementById('sendBtn');
 const speechPreviewBar = document.getElementById('speechPreviewBar');
 const speechPreviewText = document.getElementById('speechPreviewText');
+const scrollBottomBtn = document.getElementById('scrollBottomBtn');
+let userHasScrolledUp = false;
 
 // Preview Modal Elements
 const previewModal = document.getElementById('previewModal');
@@ -145,12 +147,18 @@ const cancelSettingsBtn = document.getElementById('cancelSettingsBtn');
 const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const toggleApiKeyVisibility = document.getElementById('toggleApiKeyVisibility');
+const groqApiKeyInput = document.getElementById('groqApiKeyInput');
+const toggleGroqKeyVisibility = document.getElementById('toggleGroqKeyVisibility');
+const openrouterApiKeyInput = document.getElementById('openrouterApiKeyInput');
+const toggleOpenRouterKeyVisibility = document.getElementById('toggleOpenRouterKeyVisibility');
 const databaseUrlInput = document.getElementById('databaseUrlInput');
 const voiceSelect = document.getElementById('voiceSelect');
 const voiceRate = document.getElementById('voiceRate');
 const voiceRateVal = document.getElementById('voiceRateVal');
 const autoSpeakCheck = document.getElementById('autoSpeakCheck');
 const settingsFeedback = document.getElementById('settingsFeedback');
+const voiceModelPill = document.getElementById('voiceModelPill');
+const voiceModelName = document.getElementById('voiceModelName');
 
 // Persistent auto-speak setting (default: false for silent chat mode)
 if (autoSpeakCheck) {
@@ -859,6 +867,9 @@ function startNewChat() {
 
 function renderMessages(messages) {
   messagesStream.innerHTML = '';
+  userHasScrolledUp = false;
+  updateScrollPillVisibility();
+
   if (!messages || messages.length === 0) {
     welcomeHero.classList.remove('hidden');
     return;
@@ -868,7 +879,7 @@ function renderMessages(messages) {
   messages.forEach(msg => {
     appendMessageToStream(msg.role, msg.content, false);
   });
-  scrollToBottom();
+  scrollToBottom(true);
 }
 
 function escapeHtml(str) {
@@ -1193,14 +1204,102 @@ function appendMessageToStream(role, content, autoPlayAudio = false, sources = [
   scrollToBottom();
 }
 
-function scrollToBottom() {
+function isScrolledNearBottom(threshold = 20) {
+  if (!chatContainer) return true;
+  const distanceFromBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
+  return distanceFromBottom <= threshold;
+}
+
+function updateScrollPillVisibility() {
+  if (!scrollBottomBtn) return;
+  if (userHasScrolledUp) {
+    scrollBottomBtn.classList.remove('hidden');
+  } else {
+    scrollBottomBtn.classList.add('hidden');
+  }
+}
+
+function scrollToBottom(force = false) {
+  if (!chatContainer) return;
+  // If user has intentionally scrolled up to read and force is false, NEVER force scroll
+  if (!force && userHasScrolledUp) {
+    return;
+  }
   chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+// 1. Listen for explicit user scroll input (Wheel on mouse / Trackpad)
+if (chatContainer) {
+  chatContainer.addEventListener('wheel', (e) => {
+    if (e.deltaY < -1) {
+      // User is scrolling UP to read earlier text
+      userHasScrolledUp = true;
+      updateScrollPillVisibility();
+    } else if (e.deltaY > 1 && isScrolledNearBottom(25)) {
+      // User scrolled all the way back down to the bottom
+      userHasScrolledUp = false;
+      updateScrollPillVisibility();
+    }
+  }, { passive: true });
+
+  // 2. Touch support for mobile / touch devices
+  let touchStartY = 0;
+  chatContainer.addEventListener('touchstart', (e) => {
+    if (e.touches && e.touches[0]) {
+      touchStartY = e.touches[0].clientY;
+    }
+  }, { passive: true });
+
+  chatContainer.addEventListener('touchmove', (e) => {
+    if (e.touches && e.touches[0]) {
+      const deltaY = e.touches[0].clientY - touchStartY;
+      if (deltaY > 10) {
+        // Dragging down = scrolling up
+        userHasScrolledUp = true;
+        updateScrollPillVisibility();
+      } else if (deltaY < -10 && isScrolledNearBottom(25)) {
+        userHasScrolledUp = false;
+        updateScrollPillVisibility();
+      }
+    }
+  }, { passive: true });
+
+  // 3. Scrollbar dragging / generic scroll
+  chatContainer.addEventListener('scroll', () => {
+    if (isScrolledNearBottom(20)) {
+      userHasScrolledUp = false;
+      updateScrollPillVisibility();
+    } else {
+      const dist = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
+      if (dist > 35) {
+        userHasScrolledUp = true;
+        updateScrollPillVisibility();
+      }
+    }
+  }, { passive: true });
+}
+
+if (scrollBottomBtn) {
+  scrollBottomBtn.addEventListener('click', () => {
+    userHasScrolledUp = false;
+    updateScrollPillVisibility();
+    if (chatContainer) {
+      chatContainer.scrollTo({
+        top: chatContainer.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  });
 }
 
 // 4. Send Message Handler
 async function handleSendMessage(text) {
   const message = text || messageInput.value.trim();
   if (!message) return;
+
+  // Reset scroll state on user input so view jumps to the new message
+  userHasScrolledUp = false;
+  updateScrollPillVisibility();
 
   // Add user message to UI
   appendMessageToStream('user', message, false);
@@ -1220,7 +1319,7 @@ async function handleSendMessage(text) {
     </div>
   `;
   messagesStream.appendChild(loadingRow);
-  scrollToBottom();
+  scrollToBottom(true);
 
   sendBtn.disabled = true;
 
@@ -1236,6 +1335,9 @@ async function handleSendMessage(text) {
         userId: currentUserId,
         message,
         model: modelSelect.value,
+        apiKey: localStorage.getItem('sona_gemini_key') || undefined,
+        groqApiKey: localStorage.getItem('sona_groq_key') || undefined,
+        openrouterApiKey: localStorage.getItem('sona_openrouter_key') || undefined,
         webSearch: isWebSearchActive
       })
     });
@@ -1591,6 +1693,9 @@ async function handleMediaVoiceSubmit(audioBase64, mimeType) {
         audioBase64,
         audioMimeType: mimeType,
         model: modelSelect.value,
+        apiKey: localStorage.getItem('sona_gemini_key') || undefined,
+        groqApiKey: localStorage.getItem('sona_groq_key') || undefined,
+        openrouterApiKey: localStorage.getItem('sona_openrouter_key') || undefined,
         language: currentSpeechLang
       })
     });
@@ -2050,6 +2155,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // Settings Modal
   openSettingsBtn.addEventListener('click', () => {
     settingsFeedback.className = 'settings-feedback hidden';
+    if (apiKeyInput && !apiKeyInput.value) {
+      apiKeyInput.value = localStorage.getItem('sona_gemini_key') || '';
+    }
+    if (groqApiKeyInput && !groqApiKeyInput.value) {
+      groqApiKeyInput.value = localStorage.getItem('sona_groq_key') || '';
+    }
+    if (openrouterApiKeyInput && !openrouterApiKeyInput.value) {
+      openrouterApiKeyInput.value = localStorage.getItem('sona_openrouter_key') || '';
+    }
     settingsModal.classList.remove('hidden');
   });
 
@@ -2061,6 +2175,148 @@ document.addEventListener('DOMContentLoaded', () => {
     apiKeyInput.type = isPwd ? 'text' : 'password';
     toggleApiKeyVisibility.textContent = isPwd ? 'Tutup' : 'Lihat';
   });
+
+  if (toggleGroqKeyVisibility && groqApiKeyInput) {
+    toggleGroqKeyVisibility.addEventListener('click', () => {
+      const isPwd = groqApiKeyInput.type === 'password';
+      groqApiKeyInput.type = isPwd ? 'text' : 'password';
+      toggleGroqKeyVisibility.textContent = isPwd ? 'Tutup' : 'Lihat';
+    });
+  }
+
+  if (toggleOpenRouterKeyVisibility && openrouterApiKeyInput) {
+    toggleOpenRouterKeyVisibility.addEventListener('click', () => {
+      const isPwd = openrouterApiKeyInput.type === 'password';
+      openrouterApiKeyInput.type = isPwd ? 'text' : 'password';
+      toggleOpenRouterKeyVisibility.textContent = isPwd ? 'Tutup' : 'Lihat';
+    });
+  }
+
+  // Voice Call Model Pill Sync
+  function updateVoiceModelPill() {
+    if (!voiceModelName || !modelSelect) return;
+    const selectedOpt = modelSelect.options[modelSelect.selectedIndex];
+    if (selectedOpt) {
+      voiceModelName.textContent = selectedOpt.text.split('(')[0].trim();
+    }
+  }
+  if (modelSelect) {
+    modelSelect.addEventListener('change', updateVoiceModelPill);
+  }
+  updateVoiceModelPill();
+
+  // === CUSTOM MODEL PICKER (DROPS DOWNWARDS CLEANLY INSIDE VIEWPORT) ===
+  const customModelPicker = document.getElementById('customModelPicker');
+  const customModelTrigger = document.getElementById('customModelTrigger');
+  const customModelLabel = document.getElementById('customModelLabel');
+  const customModelMenu = document.getElementById('customModelMenu');
+
+  function renderCustomModelMenu() {
+    if (!customModelMenu || !modelSelect) return;
+    customModelMenu.innerHTML = '';
+
+    const optgroups = modelSelect.querySelectorAll('optgroup');
+    optgroups.forEach(group => {
+      const groupDiv = document.createElement('div');
+      groupDiv.className = 'custom-select-group';
+
+      const title = document.createElement('div');
+      title.className = 'custom-select-group-title';
+      title.textContent = group.label;
+      groupDiv.appendChild(title);
+
+      const options = group.querySelectorAll('option');
+      options.forEach(opt => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'custom-select-option' + (opt.value === modelSelect.value ? ' selected' : '');
+        btn.setAttribute('role', 'option');
+        btn.setAttribute('aria-selected', opt.value === modelSelect.value ? 'true' : 'false');
+        btn.dataset.value = opt.value;
+        btn.dataset.label = opt.textContent.trim();
+
+        btn.innerHTML = `
+          <span>${opt.textContent.trim()}</span>
+          <svg class="option-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        `;
+
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          modelSelect.value = opt.value;
+          updateCustomModelTrigger();
+          closeCustomModelMenu();
+          modelSelect.dispatchEvent(new Event('change'));
+        });
+
+        groupDiv.appendChild(btn);
+      });
+
+      customModelMenu.appendChild(groupDiv);
+    });
+  }
+
+  function updateCustomModelTrigger() {
+    if (!customModelLabel || !modelSelect) return;
+    const selectedOpt = modelSelect.options[modelSelect.selectedIndex];
+    if (selectedOpt) {
+      customModelLabel.textContent = selectedOpt.textContent.trim();
+    }
+    if (customModelMenu) {
+      const allBtns = customModelMenu.querySelectorAll('.custom-select-option');
+      allBtns.forEach(b => {
+        const isSel = b.dataset.value === modelSelect.value;
+        b.classList.toggle('selected', isSel);
+        b.setAttribute('aria-selected', isSel ? 'true' : 'false');
+      });
+    }
+  }
+
+  function openCustomModelMenu() {
+    if (!customModelMenu || !customModelTrigger) return;
+    customModelMenu.classList.add('open');
+    customModelTrigger.classList.add('active');
+    customModelTrigger.setAttribute('aria-expanded', 'true');
+  }
+
+  function closeCustomModelMenu() {
+    if (!customModelMenu || !customModelTrigger) return;
+    customModelMenu.classList.remove('open');
+    customModelTrigger.classList.remove('active');
+    customModelTrigger.setAttribute('aria-expanded', 'false');
+  }
+
+  if (customModelTrigger && customModelMenu) {
+    renderCustomModelMenu();
+    updateCustomModelTrigger();
+
+    customModelTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = customModelMenu.classList.contains('open');
+      if (isOpen) {
+        closeCustomModelMenu();
+      } else {
+        openCustomModelMenu();
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!customModelPicker || !customModelPicker.contains(e.target)) {
+        closeCustomModelMenu();
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && customModelMenu.classList.contains('open')) {
+        closeCustomModelMenu();
+      }
+    });
+
+    modelSelect.addEventListener('change', () => {
+      updateCustomModelTrigger();
+    });
+  }
 
   voiceRate.addEventListener('input', () => {
     voiceRateVal.textContent = `${voiceRate.value}x`;
@@ -2102,8 +2358,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const payload = {};
-    if (apiKeyInput.value.trim()) payload.geminiApiKey = apiKeyInput.value.trim();
-    if (databaseUrlInput.value.trim()) payload.databaseUrl = databaseUrlInput.value.trim();
+    if (apiKeyInput && apiKeyInput.value.trim()) {
+      payload.geminiApiKey = apiKeyInput.value.trim();
+      localStorage.setItem('sona_gemini_key', apiKeyInput.value.trim());
+    }
+    if (groqApiKeyInput && groqApiKeyInput.value.trim()) {
+      payload.groqApiKey = groqApiKeyInput.value.trim();
+      localStorage.setItem('sona_groq_key', groqApiKeyInput.value.trim());
+    }
+    if (openrouterApiKeyInput && openrouterApiKeyInput.value.trim()) {
+      payload.openrouterApiKey = openrouterApiKeyInput.value.trim();
+      localStorage.setItem('sona_openrouter_key', openrouterApiKeyInput.value.trim());
+    }
+    if (databaseUrlInput && databaseUrlInput.value.trim()) {
+      payload.databaseUrl = databaseUrlInput.value.trim();
+    }
 
     try {
       const res = await fetch('/api/settings', {

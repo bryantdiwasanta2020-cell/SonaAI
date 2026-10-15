@@ -1,13 +1,31 @@
 import { GoogleGenAI } from '@google/genai';
 
-let cachedApiKey = process.env.GEMINI_API_KEY || '';
+let cachedGeminiKey = process.env.GEMINI_API_KEY || '';
+let cachedGroqKey = process.env.GROQ_API_KEY || '';
+let cachedOpenRouterKey = process.env.OPENROUTER_API_KEY || '';
 
 export function setApiKey(key) {
-  cachedApiKey = key;
+  cachedGeminiKey = key;
 }
 
 export function getApiKey() {
-  return cachedApiKey || process.env.GEMINI_API_KEY || '';
+  return cachedGeminiKey || process.env.GEMINI_API_KEY || '';
+}
+
+export function setGroqApiKey(key) {
+  cachedGroqKey = key;
+}
+
+export function getGroqApiKey() {
+  return cachedGroqKey || process.env.GROQ_API_KEY || '';
+}
+
+export function setOpenRouterApiKey(key) {
+  cachedOpenRouterKey = key;
+}
+
+export function getOpenRouterApiKey() {
+  return cachedOpenRouterKey || process.env.OPENROUTER_API_KEY || '';
 }
 
 const SYSTEM_INSTRUCTION = `Kamu adalah SonaAI, asisten AI berbasis web yang cerdas, modern, ramah, dan serbaguna.
@@ -27,7 +45,147 @@ Karakter dan Aturan Utama:
 Nama pembuat atau brand-mu adalah SonaAI
 Kamu di Buat Oleh Bryant`;
 
+// Build localized language prompt guidance
+function buildLanguageInstruction(language) {
+  let instruction = SYSTEM_INSTRUCTION;
+  if (language && language.startsWith('en')) {
+    instruction += '\n\n[PANDUAN BAHASA SESI INI]: Pengguna sedang berinteraksi dalam Bahasa Inggris (English). Kamu WAJIB menjawab 100% menggunakan Bahasa Inggris yang fasih, ramah, dan natural.';
+  } else if (language && language.startsWith('id')) {
+    instruction += '\n\n[PANDUAN BAHASA SESI INI]: Pengguna sedang berinteraksi dalam Bahasa Indonesia. Kamu WAJIB menjawab menggunakan Bahasa Indonesia yang ramah dan solutif.';
+  }
+  return instruction;
+}
 
+// Convert history to OpenAI standard format
+function formatOpenAiMessages(history, prompt, language) {
+  const messages = [
+    { role: 'system', content: buildLanguageInstruction(language) }
+  ];
+
+  const recentHistory = history.slice(-10);
+  for (const msg of recentHistory) {
+    messages.push({
+      role: msg.role === 'user' ? 'user' : 'assistant',
+      content: msg.content
+    });
+  }
+
+  if (prompt && prompt.trim()) {
+    messages.push({ role: 'user', content: prompt });
+  }
+
+  return messages;
+}
+
+// === GROQ INTEGRATION ===
+// 1. Groq Whisper Audio Transcription (Ultra-fast <200ms)
+async function transcribeAudioWithGroq(audioBase64, mimeType, groqKey, language) {
+  const binaryBuffer = Buffer.from(audioBase64, 'base64');
+  const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('wav') ? 'wav' : 'webm';
+  const audioBlob = new Blob([binaryBuffer], { type: mimeType });
+
+  const formData = new FormData();
+  formData.append('file', audioBlob, `speech.${ext}`);
+  formData.append('model', 'whisper-large-v3-turbo');
+  formData.append('response_format', 'json');
+  formData.append('temperature', '0');
+  if (language) {
+    formData.append('language', language.startsWith('en') ? 'en' : 'id');
+  }
+
+  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${groqKey}`
+    },
+    body: formData
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Groq Whisper Audio Error [${res.status}]: ${errorText}`);
+  }
+
+  const json = await res.json();
+  return json.text || '';
+}
+
+// 2. Groq Chat API
+async function generateGroqResponse({ model, prompt, history, groqKey, language }) {
+  let realModel = model.replace(/^groq:/, '').trim() || 'qwen/qwen3.8-27b';
+  // Graceful alias mapping if legacy names are selected
+  if (realModel === 'llama-3.3-70b-versatile' || realModel.includes('llama')) {
+    realModel = 'qwen/qwen3.8-27b';
+  }
+
+  const messages = formatOpenAiMessages(history, prompt, language);
+
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${groqKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: realModel,
+      messages,
+      temperature: 0.7,
+      max_tokens: 4096
+    })
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Groq API Error [${res.status}]: ${errorText}`);
+  }
+
+  const json = await res.json();
+  const choice = json.choices?.[0];
+  const reply = (choice?.message?.content && choice.message.content.trim())
+    ? choice.message.content
+    : (choice?.message?.reasoning || 'Maaf, Groq tidak memberikan jawaban.');
+  return reply;
+}
+
+// === OPENROUTER INTEGRATION ===
+async function generateOpenRouterResponse({ model, prompt, history, openrouterKey, language }) {
+  let realModel = model.replace(/^openrouter:/, '').trim() || 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free';
+  if (realModel.includes('deepseek') && realModel.includes(':free')) {
+    realModel = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free';
+  }
+  const messages = formatOpenAiMessages(history, prompt, language);
+
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${openrouterKey}`,
+      'HTTP-Referer': 'http://localhost:3000',
+      'X-Title': 'SonaAI',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: realModel,
+      messages,
+      temperature: 0.7,
+      max_tokens: 4096
+    })
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`OpenRouter API Error [${res.status}]: ${errorText}`);
+  }
+
+  const json = await res.json();
+  const choice = json.choices?.[0];
+  let reply = (choice?.message?.content && choice.message.content.trim())
+    ? choice.message.content
+    : (choice?.message?.reasoning || 'Maaf, OpenRouter tidak memberikan respon.');
+  return reply;
+}
+
+
+// === UNIFIED MAIN GENERATE CHAT RESPONSE GATEWAY ===
 export async function generateChatResponse({
   prompt,
   audioBase64 = null,
@@ -35,15 +193,167 @@ export async function generateChatResponse({
   history = [],
   model = 'gemini-3.5-flash-lite',
   apiKey = null,
+  groqApiKey = null,
+  openrouterApiKey = null,
   webSearch = false,
   language = null
 }) {
-  const activeKey = apiKey || getApiKey();
   const targetModel = model || 'gemini-3.5-flash-lite';
+  const hasAudio = !!(audioBase64 && audioBase64.trim());
+
+  // ----------------------------------------------------
+  // ROUTE 1: GROQ PROVIDER
+  // ----------------------------------------------------
+  if (targetModel.startsWith('groq:')) {
+    const activeGroqKey = (groqApiKey || getGroqApiKey()).trim();
+
+    if (!activeGroqKey) {
+      return {
+        text: '⚡ **Groq API Key Diperlukan**\n\nUntuk menggunakan model super kilat Groq (Llama 3.3 70B & 8B), silakan masukkan **Groq API Key** Anda di menu **Pengaturan (⚙️ Settings)**.\n\nAPI Key Groq bisa didapatkan **100% Gratis** tanpa kartu kredit di: [console.groq.com](https://console.groq.com/).',
+        isDemo: true,
+        model: targetModel
+      };
+    }
+
+    try {
+      let resolvedPrompt = prompt;
+      let userTranscription = '';
+
+      if (hasAudio) {
+        userTranscription = await transcribeAudioWithGroq(audioBase64, audioMimeType || 'audio/webm', activeGroqKey, language);
+        resolvedPrompt = userTranscription;
+      }
+
+      const replyText = await generateGroqResponse({
+        model: targetModel,
+        prompt: resolvedPrompt,
+        history,
+        groqKey: activeGroqKey,
+        language
+      });
+
+      return {
+        text: replyText,
+        userTranscription,
+        model: targetModel,
+        isDemo: false,
+        sources: [],
+        queries: []
+      };
+    } catch (err) {
+      console.error('Groq Execution Error:', err);
+      return {
+        text: `⚠️ **Gagal memproses via Groq**: ${err.message}`,
+        model: targetModel,
+        isDemo: false
+      };
+    }
+  }
+
+  // ----------------------------------------------------
+  // ROUTE 2: OPENROUTER PROVIDER
+  // ----------------------------------------------------
+  if (targetModel.startsWith('openrouter:')) {
+    const activeOpenRouterKey = (openrouterApiKey || getOpenRouterApiKey()).trim();
+
+    if (!activeOpenRouterKey) {
+      return {
+        text: '🌐 **OpenRouter API Key Diperlukan**\n\nUntuk menggunakan model-model OpenRouter (seperti DeepSeek R1/V3, Claude, GPT-4o), silakan masukkan **OpenRouter API Key** Anda di menu **Pengaturan (⚙️ Settings)**.\n\nDapatkan API Key Anda di: [openrouter.ai/keys](https://openrouter.ai/keys).',
+        isDemo: true,
+        model: targetModel
+      };
+    }
+
+    let resolvedPrompt = prompt;
+    let userTranscription = '';
+
+    try {
+
+      // If audio is provided, try Groq Whisper first, then Gemini if available
+      if (hasAudio) {
+        const groqKey = (groqApiKey || getGroqApiKey()).trim();
+        const geminiKey = (apiKey || getApiKey()).trim();
+
+        if (groqKey) {
+          userTranscription = await transcribeAudioWithGroq(audioBase64, audioMimeType || 'audio/webm', groqKey, language);
+          resolvedPrompt = userTranscription;
+        } else if (geminiKey) {
+          const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
+          const geminiRes = await geminiAi.models.generateContent({
+            model: 'gemini-3.5-flash-lite',
+            contents: [{
+              role: 'user',
+              parts: [
+                { inlineData: { mimeType: audioMimeType || 'audio/webm', data: audioBase64 } },
+                { text: 'Transkrip suara ini dengan persis tanpa komentar apa pun.' }
+              ]
+            }]
+          });
+          userTranscription = (geminiRes.text || '').trim();
+          resolvedPrompt = userTranscription;
+        }
+      }
+
+      const replyText = await generateOpenRouterResponse({
+        model: targetModel,
+        prompt: resolvedPrompt,
+        history,
+        openrouterKey: activeOpenRouterKey,
+        language
+      });
+
+      return {
+        text: replyText,
+        userTranscription,
+        model: targetModel,
+        isDemo: false,
+        sources: [],
+        queries: []
+      };
+    } catch (err) {
+      console.error('OpenRouter Execution Error:', err);
+
+      // Intelligent Auto-Fallback: if OpenRouter is rate-limited (429) or busy, seamlessly route to Gemini
+      const geminiKey = (apiKey || getApiKey()).trim();
+      if (geminiKey) {
+        try {
+          const fallbackRes = await generateChatResponse({
+            prompt: resolvedPrompt || prompt,
+            audioBase64: null,
+            history,
+            model: 'gemini-3.5-flash-lite',
+            apiKey: geminiKey,
+            language
+          });
+          return {
+            text: `> 💡 *Catatan: Server gratis OpenRouter sedang padat antrean/limit (${err.message.includes('429') ? '429 Rate Limit' : 'Busy'}), SonaAI otomatis mengalihkan jawaban ke Gemini 3.5 Flash-Lite agar obrolanmu tidak terhenti.* \n\n${fallbackRes.text}`,
+            userTranscription,
+            model: 'gemini-3.5-flash-lite (Auto-Fallback)',
+            isDemo: false,
+            sources: fallbackRes.sources || [],
+            queries: fallbackRes.queries || []
+          };
+        } catch (fbErr) {
+          console.error('Auto-fallback to Gemini error:', fbErr);
+        }
+      }
+
+      return {
+        text: `⚠️ **Gagal memproses via OpenRouter**: ${err.message}`,
+        model: targetModel,
+        isDemo: false
+      };
+    }
+  }
+
+  // ----------------------------------------------------
+  // ROUTE 3: GOOGLE GEMINI PROVIDER (DEFAULT & NATIVE AUDIO)
+  // ----------------------------------------------------
+  const activeKey = apiKey || getApiKey();
 
   if (!activeKey || !activeKey.trim()) {
     return {
-      text: 'Halo! Saya SonaAI. ✨\n\nUntuk mulai mengobrol dan mendengar suara saya, silakan masukkan **Gemini API Key** Anda melalui tombol **Pengaturan (⚙️ Settings)** di atas.\n\nAPI Key bisa didapatkan secara gratis di [Google AI Studio](https://aistudio.google.com/).',
+      text: 'Halo! Saya SonaAI. ✨\n\nUntuk mulai mengobrol dan mendengar suara saya, silakan masukkan **Gemini API Key** Anda melalui tombol **Pengaturan (⚙️ Settings)** di kiri bawah.\n\nAPI Key bisa didapatkan secara gratis di [Google AI Studio](https://aistudio.google.com/).',
       isDemo: true
     };
   }
@@ -54,7 +364,7 @@ export async function generateChatResponse({
     // Format chat history for Google GenAI SDK
     const formattedContents = [];
 
-    // Add recent history (up to last 10 messages for rich context)
+    // Add recent history
     const recentHistory = history.slice(-10);
     for (const msg of recentHistory) {
       formattedContents.push({
@@ -99,12 +409,7 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
       tools.push({ googleSearch: {} });
     }
 
-    let dynamicInstruction = SYSTEM_INSTRUCTION;
-    if (language && language.startsWith('en')) {
-      dynamicInstruction += '\n\n[PANDUAN BAHASA SESI INI]: Pengguna sedang berinteraksi dalam Bahasa Inggris (English). Kamu WAJIB menjawab 100% menggunakan Bahasa Inggris yang fasih, ramah, dan natural.';
-    } else if (language && language.startsWith('id')) {
-      dynamicInstruction += '\n\n[PANDUAN BAHASA SESI INI]: Pengguna sedang berinteraksi dalam Bahasa Indonesia. Kamu WAJIB menjawab menggunakan Bahasa Indonesia yang ramah dan solutif.';
-    }
+    const dynamicInstruction = buildLanguageInstruction(language);
 
     const config = {
       systemInstruction: dynamicInstruction,
@@ -133,7 +438,6 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
       };
     };
 
-    // Helper with timeout and automatic backoff retry
     const delay = ms => new Promise(res => setTimeout(res, ms));
 
     const fetchWithRetry = async (modelName, timeoutMs = 8000, maxRetries = 2) => {

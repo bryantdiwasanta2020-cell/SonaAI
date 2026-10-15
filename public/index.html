@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2.6">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 </head>
@@ -73,14 +73,35 @@
         </div>
 
         <div class="nav-right">
-          <!-- Model Switcher -->
-          <div class="model-picker-container">
-            <label for="modelSelect" class="sr-only">Model</label>
-            <select id="modelSelect" class="model-select">
-              <option value="gemini-3.5-flash-lite" selected>Gemini 3.5 Flash-Lite (Cepat & Stabil)</option>
-              <option value="gemini-3.8-flash">Gemini 3.8 Flash (Cerdas)</option>
-              <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option>
-              <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+          <!-- Custom Model Switcher (Strictly drops DOWNWARDS inside viewport) -->
+          <div class="custom-model-picker" id="customModelPicker">
+            <button type="button" class="custom-select-trigger" id="customModelTrigger" aria-haspopup="listbox" aria-expanded="false" title="Pilih Model AI">
+              <span class="custom-select-label" id="customModelLabel">Gemini 3.5 Flash-Lite</span>
+              <svg class="custom-select-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+
+            <!-- Custom Dropdown Menu -->
+            <div class="custom-select-menu" id="customModelMenu" role="listbox" tabindex="-1"></div>
+
+            <!-- Underlying select preserved for full compatibility -->
+            <select id="modelSelect" class="sr-only" aria-hidden="true" tabindex="-1">
+              <optgroup label="⚡ Groq">
+                <option value="groq:qwen/qwen3.8-27b">Qwen 27B</option>
+                <option value="groq:openai/gpt-oss-120b">GPT OSS 120B</option>
+                <option value="groq:openai/gpt-oss-20b">GPT OSS 20B</option>
+              </optgroup>
+              <optgroup label="🌐 OpenRouter">
+                <option value="openrouter:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free">Nvidia Nemotron 30B</option>
+                <option value="openrouter:nvidia/nemotron-3-super-120b-a12b:free">Nvidia Nemotron 120B</option>
+                <option value="openrouter:nvidia/nemotron-3.5-lightning:free">Nvidia Nemotron 3.5</option>
+                <option value="openrouter:cohere/north-mini-code:free">Cohere Mini Code</option>
+              </optgroup>
+              <optgroup label="✨ Google Gemini">
+                <option value="gemini-3.5-flash-lite" selected>Gemini 3.5 Flash-Lite</option>
+                <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+                <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option>
+                <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+              </optgroup>
             </select>
           </div>
 
@@ -133,6 +154,14 @@
         <span class="speech-preview-text" id="speechPreviewText">Mendengarkan...</span>
       </div>
 
+      <!-- Floating Scroll to Bottom Pill Button -->
+      <div class="scroll-bottom-container">
+        <button type="button" class="scroll-bottom-btn hidden" id="scrollBottomBtn" title="Scroll ke pesan terbaru">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
+          <span class="scroll-bottom-text">Lihat Balasan Baru</span>
+        </button>
+      </div>
+
       <!-- Input Area -->
       <footer class="input-area">
         <form class="input-form" id="chatForm">
@@ -168,6 +197,10 @@
     <div class="voice-call-header">
       <div class="voice-call-title">
         <img src="logo.png" alt="Sona" class="voice-header-logo">
+      </div>
+      <div class="voice-model-pill" id="voiceModelPill" title="Model AI yang sedang aktif">
+        <span class="voice-model-dot"></span>
+        <span id="voiceModelName">Gemini 3.5 Flash-Lite</span>
       </div>
       <div class="voice-lang-pill-container" title="Pilih Bahasa Bicara">
         <button type="button" class="voice-lang-btn active" id="btnLangId" data-lang="id-ID">🇮🇩 ID</button>
@@ -264,10 +297,33 @@
         <div class="form-group">
           <label for="apiKeyInput" class="form-label">
             <span>Google Gemini API Key</span>
+            <a href="https://aistudio.google.com/" target="_blank" class="form-link-hint">Dapatkan Gratis ↗</a>
           </label>
           <div class="input-with-action">
             <input type="password" id="apiKeyInput" placeholder="AIzaSy..." class="modal-input">
             <button type="button" class="btn-secondary" id="toggleApiKeyVisibility">Lihat</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="groqApiKeyInput" class="form-label">
+            <span>⚡ Groq API Key (Llama 3.3 70B - Respon Kilat)</span>
+            <a href="https://console.groq.com/" target="_blank" class="form-link-hint">Dapatkan Gratis ↗</a>
+          </label>
+          <div class="input-with-action">
+            <input type="password" id="groqApiKeyInput" placeholder="gsk_..." class="modal-input">
+            <button type="button" class="btn-secondary" id="toggleGroqKeyVisibility">Lihat</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="openrouterApiKeyInput" class="form-label">
+            <span>🌐 OpenRouter API Key (DeepSeek R1/V3, Claude, GPT)</span>
+            <a href="https://openrouter.ai/keys" target="_blank" class="form-link-hint">Dapatkan Kunci ↗</a>
+          </label>
+          <div class="input-with-action">
+            <input type="password" id="openrouterApiKeyInput" placeholder="sk-or-v1-..." class="modal-input">
+            <button type="button" class="btn-secondary" id="toggleOpenRouterKeyVisibility">Lihat</button>
           </div>
         </div>
 
@@ -339,6 +395,6 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=2.6"></script>
 </body>
 </html>
