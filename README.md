@@ -1,60 +1,49 @@
 # 🎙️ SonaAI - Web-Based AI Assistant
 
-**SonaAI** adalah asisten AI berbasis web dengan kemampuan interaksi suara dua arah (bisa berbicara dan mendengar), pemilihan model cerdas (Google Gemini), dan database SQL berbasis Cloud (Supabase / PostgreSQL) sehingga **0% data disimpan di disk lokal Anda**.
+**SonaAI** adalah asisten AI berbasis web generasi baru dengan interaksi suara dua arah real-time, dukungan **Multi-Model AI (100% Gratis)**, sistem *Intelligent Auto-Fallback*, dan integrasi **Database Cloud PostgreSQL (Supabase)** sehingga **0% data disimpan di disk lokal Anda**.
 
 ---
 
 ## ✨ Fitur Utama
 
-1. **🎙️ Bisa Berbicara (Text-to-Speech) & Mendengar (Speech-to-Text)**:
-   - **Mode Suara (Voice Call)**: Layar interaktif dengan animasi **Voice Orb 3D** yang merespons suara secara langsung.
-   - **Tombol Mikrofon**: Bicara langsung dalam bahasa Indonesia di kolom chat tanpa harus mengetik.
-   - **Putar Suara Otomatis**: Setiap jawaban SonaAI dapat langsung disuarakan dengan intonasi natural.
-2. **🧠 Multi-Model Cerdas (Google Gemini)**:
-   - `gemini-3.8-flash`: Sangat cepat, responsif, dan hemat kuota untuk obrolan sehari-hari.
-   - `gemini-2.5-pro`: Penalaran mendalam (*deep reasoning*), analisis, dan coding tingkat tinggi.
-3. **☁️ Database Cloud SQL (100% Bebas Disk Lokal)**:
-   - Terintegrasi langsung dengan **Supabase PostgreSQL** via Connection String.
-   - Jika belum memasukkan database cloud, SonaAI otomatis berjalan dalam mode *ephemeral in-memory* (RAM saja, tidak ada file SQL yang ditulis ke harddisk komputer Anda).
-4. **🎨 Tampilan UI Futuristik & Responsif**:
-   - Tema gelap modern dengan Glassmorphism, animasi partikel orb, dan dukungan mobile.
+### 1. 🎙️ Interaksi Suara Dua Arah (Voice Call & TTS)
+- **Mode Suara (Voice Call)**: Layar interaktif fullscreen dengan visualisasi **3D Glowing Voice Orb** yang bereaksi terhadap suara secara dinamis.
+- **Groq Whisper Turbo**: Transkripsi audio kilat (*<200ms latency*) dengan model `whisper-large-v3-turbo`.
+- **Text-to-Speech Alami**: Sintesis suara responsif dalam Bahasa Indonesia & Inggris dengan kontrol kecepatan bicara (*speed pitch*).
+- **Auto-Scroll Pintar**: Deteksi scroll hardware manual (mouse wheel/touchpad/layar sentuh) agar Anda tetap bisa leluasa membaca teks ke atas saat AI sedang mengetik, dilengkapi tombol mengambang *"Lihat Balasan Baru"*.
+
+### 2. 🧠 Multi-Provider & Model Gateway (100% GRATIS)
+Pilih model AI favorit Anda secara fleksibel lewat dropdown top-nav:
+- ⚡ **Groq Direct (Ultra-Fast / Respon Kilat ~0.02s)**:
+  - `Qwen 27B` – Paling instan dan hemat waktu.
+  - `GPT OSS 120B` – Model penalaran besar 120 Miliar parameter untuk penulisan berbobot.
+  - `GPT OSS 20B` – Ringan, cepat, dan responsif.
+- 🌐 **OpenRouter (Free Tier)**:
+  - `Nvidia Nemotron 30B` – Model penalaran dengan rantai pemikiran (*Chain of Thought*).
+  - `Nvidia Nemotron 120B` – Model raksasa terbuka berkapasitas tinggi.
+  - `Nvidia Nemotron 3.5` – Cepat dan serbaguna.
+  - `Cohere Mini Code` – Dioptimalkan khusus untuk coding dan pemrograman.
+- ✨ **Google Gemini (Google AI Studio)**:
+  - `Gemini 3.5 Flash-Lite` – Paling hemat token & stabil.
+  - `Gemini 3.8 Flash` – Model cerdas terbaru untuk penalaran multimodal.
+  - `Gemini 3.1 Flash-Lite` & `Gemini 3.5 Flash`.
+
+### 3. 🛡️ Intelligent Auto-Fallback System
+- Jika server gratis tertentu sedang mengalami antrean padat atau batas kuota (*Rate Limit 429*), SonaAI secara cerdas dan otomatis mengalihkan jawaban ke **Gemini 3.5 Flash-Lite**. Obrolan Anda tidak akan pernah macet atau terhenti oleh pesan error merah!
+
+### 4. ☁️ Database Cloud SQL (Supabase HTTPS REST / Port 443)
+- Riwayat obrolan dan pesan disinkronkan secara instan ke Cloud PostgreSQL via protokol HTTPS (Port 443), aman dari pemblokiran firewall dan kendala IPv6.
+- Dilengkapi mode *In-Memory Ephemeral* jika database cloud belum dikonfigurasi (aman tanpa menyentuh harddisk lokal).
+
+### 5. 🎨 Desain Glassmorphism & Custom Dropdown
+- Antarmuka futuristik bertema gelap (*Dark Aurora & Violet Glassmorphism*).
+- **Custom Dropdown Component**: Menu model meluncur ke bawah (*strictly drops downward*) di dalam layar secara rapi tanpa terpotong atau menabrak address bar.
+- Ekspor obrolan ke format Markdown (`.md`) sekali klik.
 
 ---
 
 ## 🚀 Cara Menjalankan
 
-### 1. Jalankan Server
-Buka terminal di folder ini dan jalankan:
-```bash
-npm start
-```
-Atau untuk mode development (auto-reload):
-```bash
-npm run dev
-```
-
-### 2. Buka di Browser
-Kunjungi:
-```
-http://localhost:3000
-```
-
----
-
-## ⚙️ Pengaturan API Key & Cloud Database
-
-Semua konfigurasi bisa dimasukkan langsung lewat **Tombol Pengaturan (⚙️ Settings)** di pojok kiri bawah tampilan web, atau melalui file `.env`:
-
-### 1. Google Gemini API Key (Gratis)
-1. Buka [Google AI Studio](https://aistudio.google.com/).
-2. Buat API Key baru.
-3. Masukkan ke SonaAI.
-
-### 2. Supabase Cloud PostgreSQL (Gratis)
-1. Buka [Supabase.com](https://supabase.com) dan buat proyek baru (Gratis).
-2. Pergi ke **Project Settings** > **Database** > **Connection string** (pilih mode *URI* / *Session/Transaction Pooler*).
-3. Salin connection string tersebut, contoh:
-   ```
-   postgresql://postgres.xxxx:password@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres
-   ```
-4. Masukkan ke pengaturan SonaAI. Tabel `conversations` dan `messages` akan otomatis dibuatkan di cloud!
+### 1. Kunjungi Demo Live
+Aplikasi dapat diakses langsung di:
+https://sona-ai-beta.vercel.app/
