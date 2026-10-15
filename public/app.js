@@ -1798,6 +1798,9 @@ async function handleSendAudioMessage(audioBase64, mimeType) {
         audioBase64,
         audioMimeType: mimeType,
         model: modelSelect.value,
+        apiKey: localStorage.getItem('gemini_api_key') || undefined,
+        groqApiKey: localStorage.getItem('sona_groq_key') || undefined,
+        openrouterApiKey: localStorage.getItem('sona_openrouter_key') || undefined,
         language: currentSpeechLang
       })
     });
@@ -1898,6 +1901,9 @@ async function handleVoiceCallSubmit(userSpeechText) {
         userId: currentUserId,
         message: userSpeechText,
         model: modelSelect.value,
+        apiKey: localStorage.getItem('gemini_api_key') || undefined,
+        groqApiKey: localStorage.getItem('sona_groq_key') || undefined,
+        openrouterApiKey: localStorage.getItem('sona_openrouter_key') || undefined,
         language: currentSpeechLang
       })
     });
