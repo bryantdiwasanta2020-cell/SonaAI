@@ -2973,8 +2973,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Google OAuth Login Link
   if (googleAuthBtn) {
-    const redirectTarget = window.location.origin;
-    googleAuthBtn.href = `https://dcyuwnasckkxwnpayeva.supabase.co/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTarget)}&prompt=select_account`;
+    googleAuthBtn.href = '/auth/google';
     googleAuthBtn.addEventListener('click', () => {
       if (googleAuthBtnText) googleAuthBtnText.textContent = 'Membuka Google...';
     });

@@ -46,6 +46,16 @@ function maskKey(key) {
   return key.substring(0, 4) + '••••••••' + key.substring(key.length - 4);
 }
 
+// Google OAuth Dynamic Route (Auto-detects Localhost vs Vercel Domain)
+app.get('/auth/google', (req, res) => {
+  const protocol = req.headers['x-forwarded-proto'] || (req.get('host')?.includes('localhost') ? 'http' : 'https');
+  const host = req.get('host') || 'localhost:3000';
+  const redirectTarget = `${protocol}://${host}`;
+  const sUrl = (process.env.SUPABASE_URL || 'https://dcyuwnasckkxwnpayeva.supabase.co').trim();
+  const targetUrl = `${sUrl}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTarget)}&prompt=select_account`;
+  res.redirect(targetUrl);
+});
+
 // 1. System Status
 app.get('/api/status', (req, res) => {
   const geminiKey = getApiKey();
