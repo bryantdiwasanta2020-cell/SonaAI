@@ -169,6 +169,170 @@ if (autoSpeakCheck) {
   });
 }
 
+// Auth & Guest Trial DOM Elements
+const guestCounterPill = document.getElementById('guestCounterPill');
+const guestCountText = document.getElementById('guestCountText');
+const openAuthBtn = document.getElementById('openAuthBtn');
+const userProfilePill = document.getElementById('userProfilePill');
+const userAvatar = document.getElementById('userAvatar');
+const userNameDisplay = document.getElementById('userNameDisplay');
+const logoutBtn = document.getElementById('logoutBtn');
+const guestLimitBanner = document.getElementById('guestLimitBanner');
+const guestBannerLoginBtn = document.getElementById('guestBannerLoginBtn');
+
+const authModal = document.getElementById('authModal');
+const closeAuthBtn = document.getElementById('closeAuthBtn');
+const tabLoginBtn = document.getElementById('tabLoginBtn');
+const tabRegisterBtn = document.getElementById('tabRegisterBtn');
+const googleAuthBtn = document.getElementById('googleAuthBtn');
+const googleAuthBtnText = document.getElementById('googleAuthBtnText');
+const authForm = document.getElementById('authForm');
+const authEmailInput = document.getElementById('authEmailInput');
+const authPasswordInput = document.getElementById('authPasswordInput');
+const authSubmitBtn = document.getElementById('authSubmitBtn');
+const authSubmitText = document.getElementById('authSubmitText');
+const authFeedback = document.getElementById('authFeedback');
+const authModalTitle = document.getElementById('authModalTitle');
+const authModalSubtitle = document.getElementById('authModalSubtitle');
+
+// Auth & Guest State
+let supabaseClient = null;
+let currentUser = null;
+const MAX_GUEST_CHATS = 2;
+let guestChatCount = parseInt(localStorage.getItem('sona_guest_chats') || '0', 10);
+let isRegisterMode = false;
+
+try {
+  const savedUserJson = localStorage.getItem('sona_user');
+  if (savedUserJson) currentUser = JSON.parse(savedUserJson);
+} catch (_) {}
+
+function getActiveUserId() {
+  if (currentUser && currentUser.id) return currentUser.id;
+  return currentUserId;
+}
+
+function updateGuestUI() {
+  if (currentUser) {
+    if (guestCounterPill) guestCounterPill.classList.add('hidden');
+    if (openAuthBtn) openAuthBtn.classList.add('hidden');
+    if (userProfilePill) {
+      userProfilePill.classList.remove('hidden');
+      if (userNameDisplay) userNameDisplay.textContent = currentUser.name || (currentUser.email ? currentUser.email.split('@')[0] : 'Akun Saya');
+      if (userAvatar) {
+        if (currentUser.avatar) {
+          userAvatar.innerHTML = `<img src="${currentUser.avatar}" alt="Avatar" style="width:100%;height:100%;border-radius:50%;object-fit:cover;display:block;">`;
+        } else {
+          userAvatar.textContent = (currentUser.name || currentUser.email || 'U')[0].toUpperCase();
+        }
+      }
+    }
+    if (guestLimitBanner) guestLimitBanner.classList.add('hidden');
+    if (sendBtn) sendBtn.disabled = false;
+    if (messageInput) messageInput.placeholder = 'Ketik pesan untuk Sona...';
+  } else {
+    if (userProfilePill) userProfilePill.classList.add('hidden');
+    if (openAuthBtn) openAuthBtn.classList.remove('hidden');
+    if (guestCounterPill) {
+      guestCounterPill.classList.remove('hidden');
+      const remaining = Math.max(0, MAX_GUEST_CHATS - guestChatCount);
+      if (remaining > 0) {
+        guestCounterPill.classList.remove('limit-reached');
+        if (guestCountText) guestCountText.textContent = `${remaining} Kuota Tamu`;
+        if (guestLimitBanner) guestLimitBanner.classList.add('hidden');
+        if (messageInput) messageInput.placeholder = 'Ketik pesan untuk Sona...';
+      } else {
+        guestCounterPill.classList.add('limit-reached');
+        if (guestCountText) guestCountText.textContent = 'Batas Tamu';
+        if (guestLimitBanner) guestLimitBanner.classList.remove('hidden');
+        if (messageInput) messageInput.placeholder = 'Batas kuota tamu tercapai. Masuk untuk melanjutkan...';
+      }
+    }
+  }
+}
+
+function openAuthModal(customSubtitle = null) {
+  if (!authModal) return;
+  authModal.classList.remove('hidden');
+  if (authFeedback) {
+    authFeedback.classList.add('hidden');
+    authFeedback.textContent = '';
+  }
+  if (customSubtitle && authModalSubtitle) {
+    authModalSubtitle.textContent = customSubtitle;
+  } else if (authModalSubtitle) {
+    authModalSubtitle.textContent = isRegisterMode 
+      ? 'Daftar sekarang untuk chat tanpa batas & simpan riwayat di Cloud.'
+      : 'Masuk untuk obrolan tanpa batas & simpan riwayat di Cloud.';
+  }
+  if (authEmailInput) authEmailInput.focus();
+}
+
+function closeAuthModal() {
+  if (!authModal) return;
+  authModal.classList.add('hidden');
+  if (authFeedback) authFeedback.classList.add('hidden');
+}
+
+function setAuthMode(register) {
+  isRegisterMode = register;
+  if (tabLoginBtn) tabLoginBtn.classList.toggle('active', !isRegisterMode);
+  if (tabRegisterBtn) tabRegisterBtn.classList.toggle('active', isRegisterMode);
+  if (authModalTitle) authModalTitle.textContent = isRegisterMode ? 'Buat Akun SonaAI' : 'Lanjutkan Bersama SonaAI';
+  if (authModalSubtitle) authModalSubtitle.textContent = isRegisterMode 
+    ? 'Daftar sekarang untuk chat tanpa batas & simpan riwayat di Cloud.'
+    : 'Masuk untuk obrolan tanpa batas & simpan riwayat di Cloud.';
+  if (authSubmitText) authSubmitText.textContent = isRegisterMode ? 'Daftar Akun Baru' : 'Masuk ke SonaAI';
+  if (authFeedback) authFeedback.classList.add('hidden');
+}
+
+function handleUserLoggedIn(user) {
+  currentUser = user;
+  localStorage.setItem('sona_user', JSON.stringify(user));
+  updateGuestUI();
+  closeAuthModal();
+  loadConversations();
+}
+
+function checkHashForAuth() {
+  try {
+    if (window.location.hash && window.location.hash.includes('access_token=')) {
+      const hash = window.location.hash.substring(1);
+      const params = new URLSearchParams(hash);
+      const accessToken = params.get('access_token');
+      if (accessToken) {
+        const payloadBase64 = accessToken.split('.')[1];
+        const decoded = JSON.parse(atob(payloadBase64.replace(/-/g, '+').replace(/_/g, '/')));
+        const user = {
+          id: decoded.sub,
+          email: decoded.email,
+          name: decoded.user_metadata?.full_name || decoded.user_metadata?.name || (decoded.email ? decoded.email.split('@')[0] : 'Pengguna Google'),
+          avatar: decoded.user_metadata?.avatar_url || decoded.user_metadata?.picture || null
+        };
+        handleUserLoggedIn(user);
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        return true;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to parse access token from hash:', err);
+  }
+  return false;
+}
+
+// Immediate hash parse check on script load
+checkHashForAuth();
+
+function handleUserLoggedOut() {
+  currentUser = null;
+  localStorage.removeItem('sona_user');
+  if (supabaseClient) {
+    try { supabaseClient.auth.signOut(); } catch (_) {}
+  }
+  updateGuestUI();
+  loadConversations();
+}
+
 // Feature Cards
 const cardPromptVoice = document.getElementById('cardPromptVoice');
 const cardPromptCloud = document.getElementById('cardPromptCloud');
@@ -188,6 +352,48 @@ const CAREER_US_FEMALE_VOICES = [
   'karen',
   'serena'
 ];
+
+// Helper to score Indonesian voice fidelity (prefer Neural / Online / Google / Enhanced voices over raspy compact voices)
+function getIndoVoiceScore(v) {
+  if (!v) return -1;
+  const name = (v.name || '').toLowerCase();
+  const lang = (v.lang || '').toLowerCase();
+  const isIndo = lang.includes('id') || name.includes('indonesia') || name.includes('damayanti');
+  if (!isIndo) return -1;
+
+  let score = 20;
+  if (name.includes('natural') || name.includes('online')) score += 100; // Edge Natural (Gadis / Ardi)
+  if (name.includes('google')) score += 80;                              // Chrome Google Bahasa Indonesia (Neural Online)
+  if (name.includes('enhanced') || name.includes('premium')) score += 60; // Apple Damayanti (Enhanced / Premium)
+  if (name.includes('siri')) score += 50;
+  if (name.includes('compact')) score -= 15;                             // Old formant synthesizer with mechanical tremor
+  return score;
+}
+
+// Split long text into natural sentence chunks to prevent audio buffer jitter & Chrome 15s freeze
+function splitTextIntoSentences(text) {
+  if (!text) return [];
+  const normalized = text.trim();
+  const rawParts = normalized.split(/(?<=[.!?;\n])\s+/);
+  const chunks = [];
+  let buffer = '';
+
+  for (const part of rawParts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    if (buffer && (buffer.length + trimmed.length < 130)) {
+      buffer += ' ' + trimmed;
+    } else {
+      if (buffer) chunks.push(buffer);
+      buffer = trimmed;
+    }
+  }
+  if (buffer) chunks.push(buffer);
+  return chunks.length > 0 ? chunks : [normalized];
+}
+
+// Global speech queue tracking
+let isSpeechQueueActive = false;
 
 // 1. Initialize Speech Synthesis (Text to Speech)
 function initTextToSpeech() {
@@ -214,15 +420,16 @@ function initTextToSpeech() {
     const savedVoiceName = localStorage.getItem('sona_voice') || '';
 
     // Classify and sort:
-    // 1. Recommended US Female Career voices (Samantha, Ava, Allison, Victoria, Google US English)
-    // 2. Indonesian voices
+    // 1. Indonesian voices (Highest fidelity first: Google/Natural -> Enhanced -> Compact)
+    // 2. Recommended US Female Career voices (Samantha, Ava, Allison, Victoria, Google US English)
     // 3. Other English voices
     // 4. Other languages
     const getRank = (v) => {
+      const indoScore = getIndoVoiceScore(v);
+      if (indoScore > 0) return 1 - (indoScore / 200); // 0.4 to 0.9 (highest priority for Indonesian users)
       const nameLower = v.name.toLowerCase();
       const isCareerUsFemale = CAREER_US_FEMALE_VOICES.some(n => nameLower.includes(n)) && v.lang.startsWith('en');
-      if (isCareerUsFemale) return 1;
-      if (v.lang.includes('id')) return 2;
+      if (isCareerUsFemale) return 2;
       if (v.lang.startsWith('en')) return 3;
       return 4;
     };
@@ -232,24 +439,43 @@ function initTextToSpeech() {
     sorted.forEach((v) => {
       const opt = document.createElement('option');
       opt.value = v.name;
-      const rank = getRank(v);
-      if (rank === 1) {
-        opt.textContent = `✨ ${v.name} (US Female - Karir & Elegan) ⭐`;
-      } else if (rank === 2) {
-        opt.textContent = `🇮🇩 ${v.name} (${v.lang})`;
+      const indoScore = getIndoVoiceScore(v);
+      const nameLower = v.name.toLowerCase();
+      const isCareerUsFemale = CAREER_US_FEMALE_VOICES.some(n => nameLower.includes(n)) && v.lang.startsWith('en');
+
+      if (indoScore >= 70) {
+        opt.textContent = `${v.name} (Bahasa Indonesia - Jernih)`;
+      } else if (indoScore > 0) {
+        if (nameLower.includes('compact')) {
+          opt.textContent = `${v.name} (Bahasa Indonesia - Standar)`;
+        } else {
+          opt.textContent = `${v.name} (${v.lang})`;
+        }
+      } else if (isCareerUsFemale) {
+        opt.textContent = `${v.name} (English US - Natural)`;
       } else {
         opt.textContent = `${v.name} (${v.lang})`;
       }
       voiceSelect.appendChild(opt);
     });
 
-    // Auto-select preferred voice: saved preference -> or first US Career female voice (Samantha / Ava)
+    // Auto-select preferred voice: saved preference -> or highest fidelity Indo voice -> or US Career female
     if (savedVoiceName && voices.some(v => v.name === savedVoiceName)) {
       voiceSelect.value = savedVoiceName;
     } else {
-      const bestFemaleUs = sorted.find(v => getRank(v) === 1);
-      if (bestFemaleUs) {
+      const bestIndo = sorted.find(v => getIndoVoiceScore(v) >= 70);
+      const fallbackIndo = sorted.find(v => getIndoVoiceScore(v) > 0);
+      const bestFemaleUs = sorted.find(v => {
+        const nameLower = v.name.toLowerCase();
+        return CAREER_US_FEMALE_VOICES.some(n => nameLower.includes(n)) && v.lang.startsWith('en');
+      });
+
+      if (bestIndo) {
+        voiceSelect.value = bestIndo.name;
+      } else if (bestFemaleUs) {
         voiceSelect.value = bestFemaleUs.name;
+      } else if (fallbackIndo) {
+        voiceSelect.value = fallbackIndo.name;
       }
     }
   };
@@ -275,25 +501,25 @@ function detectTextLanguage(text) {
   return currentSpeechLang.startsWith('en') ? 'en' : 'id';
 }
 
-// Speak text using SpeechSynthesis with smart language matching
+// Speak text using SpeechSynthesis with smart sentence chunking & smooth voice selection
 function speakText(text, onComplete = null) {
   if (!('speechSynthesis' in window)) {
     if (onComplete) onComplete();
     return;
   }
 
-  stopSpeaking(); // stop any current audio
+  stopSpeaking(); // stop any current audio & clear queue
 
   // Clean emojis, markdown syntax, and URLs from text so TTS speaks only pure natural words
   const cleanAudioText = text
-    .replace(/\p{Extended_Pictographic}/gu, '')  // Strip all emojis (e.g. 😊, 😁, ✨, 👍, 🍌)
-    .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')       // Strip supplemental symbols & pictographs
-    .replace(/[\u{2600}-\u{27EF}]/gu, '')        // Strip misc symbols and dingbats
+    .replace(/\p{Extended_Pictographic}/gu, '')  // Strip all emojis
+    .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')       // Strip supplemental symbols
+    .replace(/[\u{2600}-\u{27EF}]/gu, '')        // Strip misc symbols
     .replace(/[\u{1F3FB}-\u{1F3FF}]/gu, '')      // Strip skin tone modifiers
     .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, '')      // Strip country flag indicators
-    .replace(/\uFE0F|\uFE0E/g, '')               // Strip emoji variation selectors
+    .replace(/\uFE0F|\uFE0E/g, '')               // Strip variation selectors
     .replace(/\u200D/g, '')                      // Strip zero-width joiner
-    .replace(/```[\s\S]*?```/g, ' cuplikan kode ') // Handle code blocks
+    .replace(/```[\s\S]*?```/g, ' cuplikan kode ')
     .replace(/`[^`]+`/g, ' ')
     .replace(/[*#_~\[\]\(\)>]/g, ' ')
     .replace(/https?:\/\/\S+/g, ' tautan web ')
@@ -307,62 +533,97 @@ function speakText(text, onComplete = null) {
     return;
   }
 
-  currentUtterance = new SpeechSynthesisUtterance(cleanAudioText);
-  currentUtterance.rate = parseFloat(voiceRate.value) || 1.0;
+  // Split into natural sentence chunks to eliminate audio buffer jitter & stutter
+  const chunks = splitTextIntoSentences(cleanAudioText);
+  if (!chunks.length) {
+    if (onComplete) onComplete();
+    return;
+  }
 
   const detectedLang = detectTextLanguage(cleanAudioText);
   const selectedVoiceName = voiceSelect.value || localStorage.getItem('sona_voice');
+  let chosenVoice = null;
 
   if (detectedLang === 'en') {
     // English text: Prioritize authentic US Career Female Voice (Samantha, Ava, Victoria, etc.)
-    let chosen = null;
     if (selectedVoiceName) {
-      chosen = voices.find(v => v.name === selectedVoiceName && v.lang.startsWith('en'));
+      chosenVoice = voices.find(v => v.name === selectedVoiceName && v.lang.startsWith('en'));
     }
-    if (!chosen) {
-      chosen = voices.find(v => {
+    if (!chosenVoice) {
+      chosenVoice = voices.find(v => {
         const nameLower = v.name.toLowerCase();
         return CAREER_US_FEMALE_VOICES.some(n => nameLower.includes(n)) && v.lang.startsWith('en');
       }) || voices.find(v => v.lang.startsWith('en'));
     }
-    if (chosen) {
-      currentUtterance.voice = chosen;
-      currentUtterance.lang = chosen.lang || 'en-US';
-    }
   } else {
-    // Indonesian text: Prioritize natural Indonesian Voice (Damayanti, Google Bahasa Indonesia, id-ID)
-    const indoVoice = voices.find(v => v.lang.includes('id') || v.name.toLowerCase().includes('indonesia') || v.name.toLowerCase().includes('damayanti'));
-    if (indoVoice) {
-      currentUtterance.voice = indoVoice;
-      currentUtterance.lang = indoVoice.lang || 'id-ID';
-    } else if (selectedVoiceName) {
+    // Indonesian text: Prioritize natural neural/enhanced voices over raspy compact ones
+    if (selectedVoiceName) {
       const match = voices.find(v => v.name === selectedVoiceName);
-      if (match) currentUtterance.voice = match;
+      if (match && getIndoVoiceScore(match) > 0) {
+        chosenVoice = match;
+      }
+    }
+    if (!chosenVoice) {
+      const indoVoices = voices.filter(v => getIndoVoiceScore(v) > 0);
+      indoVoices.sort((a, b) => getIndoVoiceScore(b) - getIndoVoiceScore(a));
+      chosenVoice = indoVoices[0] || voices.find(v => v.lang.includes('id')) || null;
     }
   }
 
-  currentUtterance.onstart = () => {
-    isSpeaking = true;
-    updateSpeakingStateUI(true);
-  };
+  isSpeaking = true;
+  isSpeechQueueActive = true;
+  updateSpeakingStateUI(true);
 
-  currentUtterance.onend = () => {
-    isSpeaking = false;
-    updateSpeakingStateUI(false);
-    if (onComplete) onComplete();
-  };
+  let chunkIndex = 0;
 
-  currentUtterance.onerror = (e) => {
-    console.warn('SpeechSynthesis error:', e);
-    isSpeaking = false;
-    updateSpeakingStateUI(false);
-    if (onComplete) onComplete();
-  };
+  function speakNextChunk() {
+    if (!isSpeechQueueActive) return;
 
-  window.speechSynthesis.speak(currentUtterance);
+    if (chunkIndex >= chunks.length) {
+      isSpeaking = false;
+      isSpeechQueueActive = false;
+      updateSpeakingStateUI(false);
+      if (onComplete) onComplete();
+      return;
+    }
+
+    const currentChunkText = chunks[chunkIndex];
+    chunkIndex++;
+
+    const utter = new SpeechSynthesisUtterance(currentChunkText);
+    currentUtterance = utter;
+
+    // Rate & Pitch stabilization:
+    // Fixed pitch of 1.0 prevents the annoying robotic tremor/vibrato
+    utter.rate = parseFloat(voiceRate.value) || 1.0;
+    utter.pitch = 1.0;
+
+    if (chosenVoice) {
+      utter.voice = chosenVoice;
+      utter.lang = chosenVoice.lang || (detectedLang === 'en' ? 'en-US' : 'id-ID');
+    }
+
+    utter.onend = () => {
+      if (isSpeechQueueActive) {
+        speakNextChunk();
+      }
+    };
+
+    utter.onerror = (e) => {
+      console.warn('SpeechSynthesis chunk error:', e);
+      if (isSpeechQueueActive) {
+        speakNextChunk();
+      }
+    };
+
+    window.speechSynthesis.speak(utter);
+  }
+
+  speakNextChunk();
 }
 
 function stopSpeaking() {
+  isSpeechQueueActive = false;
   if ('speechSynthesis' in window) {
     window.speechSynthesis.cancel();
   }
@@ -750,6 +1011,57 @@ async function fetchSystemStatus() {
       dbStatusBadge.title = data.db.message;
     }
 
+    // Initialize Supabase Client if credentials are provided
+    if (window.supabase && data.supabase && data.supabase.url && data.supabase.anonKey) {
+      if (!supabaseClient) {
+        supabaseClient = window.supabase.createClient(data.supabase.url, data.supabase.anonKey);
+        
+        supabaseClient.auth.onAuthStateChange((event, session) => {
+          if (session?.user) {
+            handleUserLoggedIn({
+              id: session.user.id,
+              email: session.user.email,
+              name: session.user.user_metadata?.full_name || session.user.email.split('@')[0],
+              avatar: session.user.user_metadata?.avatar_url || null
+            });
+          } else if (event === 'SIGNED_OUT') {
+            handleUserLoggedOut();
+          }
+        });
+
+        // Check active session
+        supabaseClient.auth.getSession().then(({ data: { session } }) => {
+          if (session?.user) {
+            handleUserLoggedIn({
+              id: session.user.id,
+              email: session.user.email,
+              name: session.user.user_metadata?.full_name || session.user.email.split('@')[0],
+              avatar: session.user.user_metadata?.avatar_url || null
+            });
+          }
+        }).catch(() => {});
+      }
+    }
+
+    // Check if user redirected back with OAuth error
+    const urlParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const oauthError = urlParams.get('error_description') || urlParams.get('error') || hashParams.get('error_description');
+    if (oauthError) {
+      console.warn('OAuth Return Error:', oauthError);
+      setTimeout(() => {
+        openAuthModal();
+        if (authFeedback) {
+          authFeedback.className = 'auth-feedback error';
+          authFeedback.textContent = decodeURIComponent(oauthError.replace(/\+/g, ' '));
+          authFeedback.classList.remove('hidden');
+        }
+      }, 400);
+    }
+
+    // Update UI for Guest / Logged in
+    updateGuestUI();
+
     if (!data.ai.hasKey) {
       // Prompt user subtly if they haven't set an API key yet
       console.log('Gemini API key is not configured.');
@@ -762,7 +1074,7 @@ async function fetchSystemStatus() {
 async function loadConversations() {
   try {
     const res = await fetch('/api/conversations', {
-      headers: { 'x-user-id': currentUserId }
+      headers: { 'x-user-id': getActiveUserId() }
     });
     conversations = await res.json();
     renderConversationsList();
@@ -844,7 +1156,7 @@ async function deleteConversation(id) {
   try {
     await fetch(`/api/conversations/${id}`, {
       method: 'DELETE',
-      headers: { 'x-user-id': currentUserId }
+      headers: { 'x-user-id': getActiveUserId() }
     });
     conversations = conversations.filter(c => c.id !== id);
     if (currentConversationId === id) {
@@ -1300,6 +1612,12 @@ async function handleSendMessage(text) {
   const message = text || messageInput.value.trim();
   if (!message) return;
 
+  // Guest Gate: Batasi 2 obrolan gratis untuk pengguna tanpa akun
+  if (!currentUser && guestChatCount >= MAX_GUEST_CHATS) {
+    openAuthModal('Batas 2 chat gratis Anda telah tercapai. Masuk atau buat akun gratis untuk melanjutkan tanpa batas!');
+    return;
+  }
+
   isSendingMessage = true;
 
   // Reset scroll state on user input so view jumps to the new message
@@ -1333,11 +1651,11 @@ async function handleSendMessage(text) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': currentUserId
+        'x-user-id': getActiveUserId()
       },
       body: JSON.stringify({
         conversationId: currentConversationId,
-        userId: currentUserId,
+        userId: getActiveUserId(),
         message,
         model: modelSelect.value,
         apiKey: localStorage.getItem('sona_gemini_key') || undefined,
@@ -1362,6 +1680,18 @@ async function handleSendMessage(text) {
 
     // Refresh conversation list to get updated titles/times
     await loadConversations();
+
+    // Guest Trial Tracking
+    if (!currentUser) {
+      guestChatCount++;
+      localStorage.setItem('sona_guest_chats', guestChatCount);
+      updateGuestUI();
+      if (guestChatCount >= MAX_GUEST_CHATS) {
+        setTimeout(() => {
+          openAuthModal('Kamu telah menggunakan 2 chat gratis sebagai tamu! Masuk atau daftar akun gratis sekarang untuk obrolan tanpa batas & simpan riwayat di Cloud.');
+        }, 1200);
+      }
+    }
   } catch (err) {
     loadingRow.remove();
     appendMessageToStream('model', `⚠️ Gagal terhubung ke server SonaAI: ${err.message}`, false);
@@ -1683,6 +2013,13 @@ function stopMediaVoiceRecordingAndSubmit() {
 }
 
 async function handleMediaVoiceSubmit(audioBase64, mimeType) {
+  if (!currentUser && guestChatCount >= MAX_GUEST_CHATS) {
+    closeVoiceCall();
+    openAuthModal('Batas 2 chat gratis Anda telah tercapai. Masuk atau buat akun gratis untuk melanjutkan tanpa batas!');
+    isProcessingVoice = false;
+    return;
+  }
+
   isProcessingVoice = true;
   const isEn = currentSpeechLang.startsWith('en');
 
@@ -1691,11 +2028,11 @@ async function handleMediaVoiceSubmit(audioBase64, mimeType) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': currentUserId
+        'x-user-id': getActiveUserId()
       },
       body: JSON.stringify({
         conversationId: currentConversationId,
-        userId: currentUserId,
+        userId: getActiveUserId(),
         audioBase64,
         audioMimeType: mimeType,
         model: modelSelect.value,
@@ -1728,12 +2065,24 @@ async function handleMediaVoiceSubmit(audioBase64, mimeType) {
     }
     voiceAiTranscript.scrollTop = 0;
 
+    // Track guest trial
+    if (!currentUser) {
+      guestChatCount++;
+      localStorage.setItem('sona_guest_chats', guestChatCount);
+      updateGuestUI();
+    }
+
     // Stage 3: SPEAKING
     setVoiceLifecycle('speaking', isEn ? 'Sona is speaking...' : 'Sona Menjawab...');
 
     speakText(data.reply, () => {
       isProcessingVoice = false;
       if (isVoiceCallActive) {
+        if (!currentUser && guestChatCount >= MAX_GUEST_CHATS) {
+          closeVoiceCall();
+          openAuthModal('Batas 2 obrolan gratis telah selesai. Masuk untuk melanjutkan panggilan suara tanpa batas!');
+          return;
+        }
         setVoiceLifecycle('listening', isEn ? 'Listening... speak anytime' : 'Silakan bicara lagi, Sona siap mendengar...');
         if (voiceUserTranscript) voiceUserTranscript.textContent = '';
         setTimeout(() => {
@@ -1787,6 +2136,11 @@ function stopMediaRecording() {
 }
 
 async function handleSendAudioMessage(audioBase64, mimeType) {
+  if (!currentUser && guestChatCount >= MAX_GUEST_CHATS) {
+    openAuthModal('Batas 2 chat gratis Anda telah tercapai. Masuk atau buat akun gratis untuk melanjutkan tanpa batas!');
+    return;
+  }
+
   sendBtn.disabled = true;
   appendMessageToStream('user', '🎙️ [Pesan Suara]', false);
   const loadingRow = appendLoadingIndicator();
@@ -1796,15 +2150,15 @@ async function handleSendAudioMessage(audioBase64, mimeType) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': currentUserId
+        'x-user-id': getActiveUserId()
       },
       body: JSON.stringify({
         conversationId: currentConversationId,
-        userId: currentUserId,
+        userId: getActiveUserId(),
         audioBase64,
         audioMimeType: mimeType,
         model: modelSelect.value,
-        apiKey: localStorage.getItem('gemini_api_key') || undefined,
+        apiKey: localStorage.getItem('sona_gemini_key') || undefined,
         groqApiKey: localStorage.getItem('sona_groq_key') || undefined,
         openrouterApiKey: localStorage.getItem('sona_openrouter_key') || undefined,
         language: currentSpeechLang
@@ -1820,6 +2174,12 @@ async function handleSendAudioMessage(audioBase64, mimeType) {
     currentConversationId = data.conversationId;
     const shouldSpeak = autoSpeakCheck && autoSpeakCheck.checked;
     appendMessageToStream('model', data.reply, shouldSpeak, data.sources, true);
+
+    if (!currentUser) {
+      guestChatCount++;
+      localStorage.setItem('sona_guest_chats', guestChatCount);
+      updateGuestUI();
+    }
     await loadConversations();
   } catch (err) {
     loadingRow.remove();
@@ -1831,6 +2191,11 @@ async function handleSendAudioMessage(audioBase64, mimeType) {
 
 // 5. Voice Call Mode Handler
 function openVoiceCall() {
+  if (!currentUser && guestChatCount >= MAX_GUEST_CHATS) {
+    openAuthModal('Mode Panggilan Suara 3D interaktif eksklusif untuk pengguna terdaftar. Masuk atau buat akun gratis sekarang!');
+    return;
+  }
+
   isVoiceCallActive = true;
   isProcessingVoice = false;
   currentRecognizedSpeech = '';
@@ -1879,6 +2244,13 @@ async function handleVoiceCallSubmit(userSpeechText) {
     return;
   }
 
+  if (!currentUser && guestChatCount >= MAX_GUEST_CHATS) {
+    closeVoiceCall();
+    openAuthModal('Batas 2 chat gratis Anda telah tercapai. Masuk atau buat akun gratis untuk melanjutkan tanpa batas!');
+    isProcessingVoice = false;
+    return;
+  }
+
   isProcessingVoice = true;
   try {
     if (speechRecognition) speechRecognition.stop();
@@ -1900,14 +2272,14 @@ async function handleVoiceCallSubmit(userSpeechText) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': currentUserId
+        'x-user-id': getActiveUserId()
       },
       body: JSON.stringify({
         conversationId: currentConversationId,
-        userId: currentUserId,
+        userId: getActiveUserId(),
         message: userSpeechText,
         model: modelSelect.value,
-        apiKey: localStorage.getItem('gemini_api_key') || undefined,
+        apiKey: localStorage.getItem('sona_gemini_key') || undefined,
         groqApiKey: localStorage.getItem('sona_groq_key') || undefined,
         openrouterApiKey: localStorage.getItem('sona_openrouter_key') || undefined,
         language: currentSpeechLang
@@ -1932,12 +2304,24 @@ async function handleVoiceCallSubmit(userSpeechText) {
     }
     voiceAiTranscript.scrollTop = 0;
 
+    // Track guest trial
+    if (!currentUser) {
+      guestChatCount++;
+      localStorage.setItem('sona_guest_chats', guestChatCount);
+      updateGuestUI();
+    }
+
     // Stage 3: SPEAKING
     setVoiceLifecycle('speaking', isEn ? 'Sona is speaking...' : 'Sona Menjawab...');
 
     speakText(data.reply, () => {
       isProcessingVoice = false;
       if (isVoiceCallActive) {
+        if (!currentUser && guestChatCount >= MAX_GUEST_CHATS) {
+          closeVoiceCall();
+          openAuthModal('Batas 2 obrolan gratis telah selesai. Masuk untuk melanjutkan panggilan suara tanpa batas!');
+          return;
+        }
         // Return seamlessly to Stage 1: LISTENING for uninterrupted hands-free conversation!
         setVoiceLifecycle('listening', isEn ? 'Listening... speak anytime' : 'Silakan bicara lagi, Sona siap mendengar...');
         voiceUserTranscript.textContent = '';
@@ -2017,6 +2401,11 @@ document.addEventListener('DOMContentLoaded', () => {
   let isChatRecording = false;
 
   micBtn.addEventListener('click', async () => {
+    if (!currentUser && guestChatCount >= MAX_GUEST_CHATS) {
+      openAuthModal('Batas 2 chat gratis Anda telah tercapai. Masuk atau buat akun gratis untuk melanjutkan tanpa batas!');
+      return;
+    }
+
     if (hasNativeSTT()) {
       if (isListening) {
         stopListening();
@@ -2542,6 +2931,121 @@ document.addEventListener('DOMContentLoaded', () => {
       ];
       const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)];
       speakText(randomGreeting);
+    });
+  }
+
+  // ==========================================
+  // Auth Modal & User Session Event Listeners
+  // ==========================================
+  if (openAuthBtn) {
+    openAuthBtn.addEventListener('click', () => openAuthModal());
+  }
+
+  if (guestBannerLoginBtn) {
+    guestBannerLoginBtn.addEventListener('click', () => openAuthModal());
+  }
+
+  if (closeAuthBtn) {
+    closeAuthBtn.addEventListener('click', closeAuthModal);
+  }
+
+  if (authModal) {
+    authModal.addEventListener('click', (e) => {
+      if (e.target === authModal) closeAuthModal();
+    });
+  }
+
+  if (tabLoginBtn) {
+    tabLoginBtn.addEventListener('click', () => setAuthMode(false));
+  }
+
+  if (tabRegisterBtn) {
+    tabRegisterBtn.addEventListener('click', () => setAuthMode(true));
+  }
+
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', () => {
+      if (confirm('Apakah Anda yakin ingin keluar dari akun?')) {
+        handleUserLoggedOut();
+      }
+    });
+  }
+
+  // Google OAuth Login Link
+  if (googleAuthBtn) {
+    const redirectTarget = window.location.origin;
+    googleAuthBtn.href = `https://dcyuwnasckkxwnpayeva.supabase.co/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTarget)}&prompt=select_account`;
+    googleAuthBtn.addEventListener('click', () => {
+      if (googleAuthBtnText) googleAuthBtnText.textContent = 'Membuka Google...';
+    });
+  }
+
+  // Email & Password Form Submit (Login & Register)
+  if (authForm) {
+    authForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = authEmailInput ? authEmailInput.value.trim() : '';
+      const password = authPasswordInput ? authPasswordInput.value.trim() : '';
+
+      if (!email || !password) return;
+
+      if (authSubmitBtn) authSubmitBtn.disabled = true;
+      if (authSubmitText) authSubmitText.textContent = 'Memproses...';
+      if (authFeedback) authFeedback.classList.add('hidden');
+
+      try {
+        if (supabaseClient) {
+          if (isRegisterMode) {
+            const { data, error } = await supabaseClient.auth.signUp({
+              email,
+              password,
+              options: { data: { full_name: email.split('@')[0] } }
+            });
+            if (error) throw error;
+            if (data?.user) {
+              if (data.session) {
+                handleUserLoggedIn({
+                  id: data.user.id,
+                  email: data.user.email,
+                  name: data.user.user_metadata?.full_name || email.split('@')[0]
+                });
+              } else {
+                authFeedback.className = 'auth-feedback success';
+                authFeedback.textContent = 'Pendaftaran berhasil! Silakan periksa email Anda untuk verifikasi atau coba login.';
+                authFeedback.classList.remove('hidden');
+                setTimeout(() => setAuthMode(false), 2000);
+              }
+            }
+          } else {
+            const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+            if (data?.user) {
+              handleUserLoggedIn({
+                id: data.user.id,
+                email: data.user.email,
+                name: data.user.user_metadata?.full_name || email.split('@')[0]
+              });
+            }
+          }
+        } else {
+          // Graceful local account fallback
+          const localUser = {
+            id: 'usr_' + btoa(email).replace(/=/g, '').substring(0, 16),
+            email,
+            name: email.split('@')[0]
+          };
+          handleUserLoggedIn(localUser);
+        }
+      } catch (err) {
+        if (authFeedback) {
+          authFeedback.className = 'auth-feedback error';
+          authFeedback.textContent = err.message || 'Terjadi kesalahan saat memproses akun.';
+          authFeedback.classList.remove('hidden');
+        }
+      } finally {
+        if (authSubmitBtn) authSubmitBtn.disabled = false;
+        if (authSubmitText) authSubmitText.textContent = isRegisterMode ? 'Daftar Akun Baru' : 'Masuk ke SonaAI';
+      }
     });
   }
 });

@@ -9,9 +9,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-  <link rel="stylesheet" href="style.css?v=2.8">
+  <link rel="stylesheet" href="style.css?v=3.0">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
   <div class="app-layout" id="appLayout">
@@ -85,18 +86,18 @@
 
             <!-- Underlying select preserved for full compatibility -->
             <select id="modelSelect" class="sr-only" aria-hidden="true" tabindex="-1">
-              <optgroup label="⚡ Groq">
+              <optgroup label="Groq">
                 <option value="groq:qwen/qwen3.8-27b">Qwen 27B</option>
                 <option value="groq:openai/gpt-oss-120b">GPT OSS 120B</option>
                 <option value="groq:openai/gpt-oss-20b">GPT OSS 20B</option>
               </optgroup>
-              <optgroup label="🌐 OpenRouter">
+              <optgroup label="OpenRouter">
                 <option value="openrouter:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free">Nvidia Nemotron 30B</option>
                 <option value="openrouter:nvidia/nemotron-3-super-120b-a12b:free">Nvidia Nemotron 120B</option>
                 <option value="openrouter:nvidia/nemotron-3.5-lightning:free">Nvidia Nemotron 3.5</option>
                 <option value="openrouter:cohere/north-mini-code:free">Cohere Mini Code</option>
               </optgroup>
-              <optgroup label="✨ Google Gemini">
+              <optgroup label="Google Gemini">
                 <option value="gemini-3.5-flash-lite" selected>Gemini 3.5 Flash-Lite</option>
                 <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
                 <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option>
@@ -116,6 +117,30 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
             <span>Suara</span>
           </button>
+
+          <!-- Guest Chat Counter -->
+          <div class="guest-counter-pill" id="guestCounterPill" title="Batas Kuota Tamu">
+            <span class="guest-pill-dot"></span>
+            <span class="guest-count-text" id="guestCountText">2 Kuota Tamu</span>
+          </div>
+
+          <!-- Auth Button (When Guest) -->
+          <button type="button" class="btn-auth-trigger" id="openAuthBtn" title="Masuk / Buat Akun">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+            <span>Masuk</span>
+          </button>
+
+          <!-- User Profile Pill (When Logged In) -->
+          <div class="user-profile-pill hidden" id="userProfilePill">
+            <div class="user-avatar" id="userAvatar">U</div>
+            <div class="user-info-text">
+              <span class="user-name-display" id="userNameDisplay">Akun Saya</span>
+              <span class="user-tier-badge">Akses Penuh</span>
+            </div>
+            <button type="button" class="btn-logout-icon" id="logoutBtn" title="Keluar">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -164,6 +189,20 @@
 
       <!-- Input Area -->
       <footer class="input-area">
+        <!-- Guest Limit Banner -->
+        <div class="guest-limit-banner hidden" id="guestLimitBanner">
+          <div class="guest-banner-left">
+            <span class="guest-banner-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </span>
+            <div class="guest-banner-msg">
+              <strong>Batas Obrolan Tamu Tercapai</strong>
+              <span>Masuk atau buat akun untuk melanjutkan percakapan tanpa batas & simpan riwayat di Cloud.</span>
+            </div>
+          </div>
+          <button type="button" class="btn-guest-login-now" id="guestBannerLoginBtn">Masuk / Buat Akun</button>
+        </div>
+
         <form class="input-form" id="chatForm">
           <button type="button" class="btn-input-action mic-btn" id="micBtn" title="Dikte Suara (Bicara untuk mengetik)">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
@@ -377,8 +416,89 @@
     </div>
   </div>
 
+  <!-- Auth Modal (Login & Register) -->
+  <div class="modal-backdrop hidden" id="authModal">
+    <div class="modal-card auth-modal-card">
+      <div class="modal-header auth-modal-header">
+        <div class="auth-brand-wrap">
+          <img src="logo.png" alt="SonaAi" class="auth-modal-logo">
+          <div class="auth-title-box">
+            <h3 class="auth-title" id="authModalTitle">Lanjutkan Bersama SonaAI</h3>
+            <p class="auth-subtitle" id="authModalSubtitle">Masuk untuk obrolan tanpa batas & simpan riwayat di Cloud.</p>
+          </div>
+        </div>
+        <button type="button" class="btn-icon" id="closeAuthBtn" title="Tutup">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="modal-body auth-modal-body">
+        <!-- Auth Tabs -->
+        <div class="auth-tabs">
+          <button type="button" class="auth-tab active" id="tabLoginBtn">Masuk</button>
+          <button type="button" class="auth-tab" id="tabRegisterBtn">Daftar Akun</button>
+        </div>
+
+        <!-- Google OAuth Button -->
+        <a href="https://dcyuwnasckkxwnpayeva.supabase.co/auth/v1/authorize?provider=google&redirect_to=http://localhost:3000&prompt=select_account" class="btn-google-auth" id="googleAuthBtn">
+          <svg width="18" height="18" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
+            <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
+            <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
+            <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+          </svg>
+          <span id="googleAuthBtnText">Lanjutkan dengan Google</span>
+        </a>
+
+        <div id="authFeedback" class="auth-feedback hidden"></div>
+
+        <div class="auth-divider">
+          <span>atau dengan email</span>
+        </div>
+
+        <form id="authForm" class="auth-form" autocomplete="on">
+          <div class="form-group">
+            <label for="authEmailInput" class="form-label">Email</label>
+            <input type="email" id="authEmailInput" class="modal-input" placeholder="nama@email.com" required autocomplete="email">
+          </div>
+
+          <div class="form-group">
+            <label for="authPasswordInput" class="form-label">Password</label>
+            <input type="password" id="authPasswordInput" class="modal-input" placeholder="Minimal 6 karakter" minlength="6" required autocomplete="current-password">
+          </div>
+
+          <button type="submit" class="btn-primary btn-auth-submit" id="authSubmitBtn">
+            <span id="authSubmitText">Masuk ke SonaAI</span>
+          </button>
+        </form>
+
+        <!-- Feature Perks List -->
+        <div class="auth-perks-list">
+          <div class="perk-item">
+            <span class="perk-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+            <span>Obrolan tanpa batas</span>
+          </div>
+          <div class="perk-item">
+            <span class="perk-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+            <span>Riwayat obrolan aman tersimpan di Cloud</span>
+          </div>
+          <div class="perk-item">
+            <span class="perk-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+            <span>Akses penuh Mode Suara 3D interaktif</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Live Code / Sandbox Preview Modal -->
-  <div class="modal-overlay hidden" id="previewModal">
+  <div class="modal-backdrop hidden" id="previewModal">
     <div class="modal-card preview-modal-card">
       <div class="modal-header">
         <div class="preview-title-wrap">
@@ -395,6 +515,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=2.8"></script>
+  <script src="app.js?v=3.3"></script>
 </body>
 </html>

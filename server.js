@@ -51,8 +51,16 @@ app.get('/api/status', (req, res) => {
   const geminiKey = getApiKey();
   const groqKey = getGroqApiKey();
   const openrouterKey = getOpenRouterApiKey();
+  const sUrl = (process.env.SUPABASE_URL || '').trim();
+  const sKey = (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '').trim();
+
   res.json({
     db: getDBStatus(),
+    supabase: {
+      url: sUrl,
+      anonKey: sKey,
+      isConfigured: !!(sUrl && sKey)
+    },
     ai: {
       hasKey: !!(geminiKey && geminiKey.trim()),
       maskedKey: maskKey(geminiKey),
@@ -177,8 +185,8 @@ app.post('/api/chat', async (req, res) => {
     let isNewConv = false;
     const userId = getUserId(req);
 
-    const summaryText = hasText ? message : '🎙️ Pesan Suara';
-    const displayMsg = hasText ? message : '🎙️ [Pesan Suara Dikirimkan]';
+    const summaryText = hasText ? message : 'Pesan Suara';
+    const displayMsg = hasText ? message : '[Pesan Suara]';
 
     if (!conversationId) {
       conversationId = 'conv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
@@ -214,7 +222,7 @@ app.post('/api/chat', async (req, res) => {
     // If audio was transcribed, update user message in DB with actual words
     let effectiveUserContent = displayMsg;
     if (hasAudio && aiResult.userTranscription && aiResult.userTranscription.trim()) {
-      effectiveUserContent = `🎙️ "${aiResult.userTranscription.trim()}"`;
+      effectiveUserContent = `"${aiResult.userTranscription.trim()}"`;
       try {
         await updateMessageContent(userMsg.id, effectiveUserContent);
         userMsg.content = effectiveUserContent;
