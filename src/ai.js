@@ -469,13 +469,13 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
 
     const delay = ms => new Promise(res => setTimeout(res, ms));
 
-    const fetchWithRetry = async (modelName, timeoutMs = 8000, maxRetries = 2) => {
+    const fetchWithRetry = async (modelName, activeConfig = config, timeoutMs = 10000, maxRetries = 1) => {
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
           const callPromise = ai.models.generateContent({
             model: modelName,
             contents: formattedContents,
-            config
+            config: activeConfig
           });
 
           const timeoutPromise = new Promise((_, reject) =>
@@ -486,9 +486,18 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
         } catch (err) {
           const isRateLimit = err.message && (err.message.includes('429') || err.message.includes('RESOURCE_EXHAUSTED'));
           const is503 = err.message && (err.message.includes('503') || err.message.includes('UNAVAILABLE'));
+
+          // If Google Search Grounding quota is exhausted (429), immediately retry without search tool in 0ms!
+          if (isRateLimit && activeConfig.tools && activeConfig.tools.length > 0) {
+            console.warn('⚠️ Google Search Grounding kuota penuh (429). Otomatis beralih tanpa web search agar cepat...');
+            const configWithoutTools = { ...activeConfig };
+            delete configWithoutTools.tools;
+            return await fetchWithRetry(modelName, configWithoutTools, timeoutMs, 0);
+          }
+
           if ((isRateLimit || is503) && attempt < maxRetries) {
-            const waitTime = (attempt + 1) * 3000;
-            console.log(`⏳ [Retry]: Model ${modelName} antre/limit. Menunggu jeda ${waitTime}ms sebelum mencoba ulang...`);
+            const waitTime = 800;
+            console.log(`⏳ [Retry]: Model ${modelName} antre/sibuk. Mencoba ulang dalam ${waitTime}ms...`);
             await delay(waitTime);
             continue;
           }
@@ -514,7 +523,7 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
     };
 
     try {
-      const response = await fetchWithRetry(targetModel, 25000);
+      const response = await fetchWithRetry(targetModel, config, 12000, 1);
       const parsed = parseTranscriptionAndAnswer(response.text);
       const grounding = extractGrounding(response);
       return {
@@ -526,12 +535,14 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
         queries: grounding.queries
       };
     } catch (err) {
-      const fallbackModels = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-3.5-flash'];
+      console.warn(`Model utama ${targetModel} terkendala (${err.message}). Mencoba model cadangan...`);
+      const fallbackModels = ['gemini-3.8-flash', 'gemini-3.5-flash'];
       for (const altModel of fallbackModels) {
         if (altModel === targetModel) continue;
         try {
-          console.log(`⚡ Mencoba model cadangan ${altModel}...`);
-          const fallbackResponse = await fetchWithRetry(altModel, 25000, 1);
+          const fallbackConfig = { ...config };
+          delete fallbackConfig.tools; // Fallbacks without tools to guarantee speed
+          const fallbackResponse = await fetchWithRetry(altModel, fallbackConfig, 8000, 0);
           const parsed = parseTranscriptionAndAnswer(fallbackResponse.text);
           const grounding = extractGrounding(fallbackResponse);
           return {
@@ -543,7 +554,7 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
             queries: grounding.queries
           };
         } catch (altErr) {
-          console.warn(`Model ${altModel} gagal:`, altErr.message);
+          console.warn(`Model cadangan ${altModel} gagal:`, altErr.message);
         }
       }
       throw err;
