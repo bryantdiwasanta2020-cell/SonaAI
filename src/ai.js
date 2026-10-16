@@ -42,6 +42,9 @@ Karakter dan Aturan Utama:
   * Format teks dengan struktur Markdown yang indah (paragraf jelas, teks tebal untuk judul poin, serta daftar bertingkat).
 - PENGGUNAAN EMOJI:
   * Emoji hanya sebagai pemanis visual tulisan. JANGAN PERNAH mengeja nama atau mendeskripsikan emoji dalam bentuk kata-kata (seperti "(tersenyum)", "(senyum gigi lebar)", atau sejenisnya).
+- PEMAHAMAN BAHASA GAUL & SLANG:
+  * Pahami dengan baik bahasa gaul, singkatan, dan slang santai Indonesia (seperti: "ea", "wkwk", "mantap", "bjir", "gokil", "santai", "cie", "yoi", dll).
+  * Jika pengguna menyapa atau bercanda dengan bahasa santai/gaul, balaslah dengan gaya yang ramah, asyik, ceria, dan bersahabat (tidak kaku seperti robot), sambil tetap cerdas dan sopan.
 Nama pembuat atau brand-mu adalah SonaAI
 Kamu di Buat Oleh Bryant`;
 
@@ -215,10 +218,10 @@ export async function generateChatResponse({
       };
     }
 
-    try {
-      let resolvedPrompt = prompt;
-      let userTranscription = '';
+    let resolvedPrompt = prompt;
+    let userTranscription = '';
 
+    try {
       if (hasAudio) {
         userTranscription = await transcribeAudioWithGroq(audioBase64, audioMimeType || 'audio/webm', activeGroqKey, language);
         resolvedPrompt = userTranscription;
@@ -242,6 +245,32 @@ export async function generateChatResponse({
       };
     } catch (err) {
       console.error('Groq Execution Error:', err);
+
+      // Intelligent Auto-Fallback: if Groq is rate-limited (429 spam) or busy, seamlessly route to Gemini Flash
+      const geminiKey = (apiKey || getApiKey()).trim();
+      if (geminiKey) {
+        try {
+          const fallbackRes = await generateChatResponse({
+            prompt: resolvedPrompt || prompt,
+            audioBase64: null,
+            history,
+            model: 'gemini-3.5-flash-lite',
+            apiKey: geminiKey,
+            language
+          });
+          return {
+            text: `> 💡 *Catatan: Server Groq sedang mencapai batas pesan/spam (${err.message.includes('429') ? '429 Rate Limit' : 'Server Sibuk'}), SonaAI otomatis mengalihkan jawaban ke Gemini Flash agar percakapan tetap lancar.* \n\n${fallbackRes.text}`,
+            userTranscription,
+            model: 'gemini-3.5-flash-lite (Auto-Fallback)',
+            isDemo: false,
+            sources: fallbackRes.sources || [],
+            queries: fallbackRes.queries || []
+          };
+        } catch (fbErr) {
+          console.error('Auto-fallback from Groq to Gemini error:', fbErr);
+        }
+      }
+
       return {
         text: `⚠️ **Gagal memproses via Groq**: ${err.message}`,
         model: targetModel,

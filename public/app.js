@@ -1293,9 +1293,14 @@ if (scrollBottomBtn) {
 }
 
 // 4. Send Message Handler
+let isSendingMessage = false;
+
 async function handleSendMessage(text) {
+  if (isSendingMessage) return; // Anti-spam: cegah pengiriman ganda bersamaan
   const message = text || messageInput.value.trim();
   if (!message) return;
+
+  isSendingMessage = true;
 
   // Reset scroll state on user input so view jumps to the new message
   userHasScrolledUp = false;
@@ -1361,6 +1366,7 @@ async function handleSendMessage(text) {
     loadingRow.remove();
     appendMessageToStream('model', `⚠️ Gagal terhubung ke server SonaAI: ${err.message}`, false);
   } finally {
+    isSendingMessage = false;
     sendBtn.disabled = false;
   }
 }
