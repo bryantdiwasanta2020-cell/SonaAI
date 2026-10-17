@@ -286,12 +286,49 @@ function setAuthMode(register) {
   if (authFeedback) authFeedback.classList.add('hidden');
 }
 
-function handleUserLoggedIn(user) {
+// In-Memory Guest Session Tracker (0 byte database writes)
+let guestSessionMessages = [];
+try {
+  const saved = sessionStorage.getItem('sona_guest_messages');
+  if (saved) guestSessionMessages = JSON.parse(saved);
+} catch (_) {}
+
+async function handleUserLoggedIn(user) {
   currentUser = user;
   localStorage.setItem('sona_user', JSON.stringify(user));
   updateGuestUI();
   closeAuthModal();
-  loadConversations();
+
+  // AUTO-MIGRATION: If guest asked questions before logging in, migrate them to their new account
+  if (guestSessionMessages && guestSessionMessages.length > 0) {
+    try {
+      const res = await fetch('/api/conversations/migrate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': user.id
+        },
+        body: JSON.stringify({
+          guestMessages: guestSessionMessages,
+          model: modelSelect ? modelSelect.value : 'gemini-3.8-flash'
+        })
+      });
+      const data = await res.json();
+      if (data.conversation) {
+        currentConversationId = data.conversation.id;
+        activeConvTitle.textContent = data.conversation.title;
+      }
+    } catch (e) {
+      console.warn('Gagal migrasi pesan tamu:', e);
+    }
+    // Clean up temporary guest memory
+    guestSessionMessages = [];
+    sessionStorage.removeItem('sona_guest_messages');
+    guestChatCount = 0;
+    localStorage.removeItem('sona_guest_chats');
+  }
+
+  await loadConversations();
 }
 
 function checkHashForAuth() {
@@ -323,14 +360,41 @@ function checkHashForAuth() {
 // Immediate hash parse check on script load
 checkHashForAuth();
 
+let isLoggingOut = false;
+
 function handleUserLoggedOut() {
+  if (isLoggingOut) return;
+  isLoggingOut = true;
+
   currentUser = null;
   localStorage.removeItem('sona_user');
+  
   if (supabaseClient) {
-    try { supabaseClient.auth.signOut(); } catch (_) {}
+    try {
+      supabaseClient.auth.signOut().catch(() => {});
+    } catch (_) {}
   }
+
+  // WIPE-CLEAN PRIVACY: Clear all traces so nobody borrowing the device can see prior chats
+  conversations = [];
+  currentConversationId = null;
+  guestSessionMessages = [];
+  guestChatCount = 0;
+  localStorage.removeItem('sona_guest_chats');
+  sessionStorage.removeItem('sona_guest_messages');
+
+  if (conversationsList) {
+    conversationsList.innerHTML = '<div class="conv-skeleton" style="padding: 24px 14px; text-align: center; color: var(--text-dim); font-size: 0.8rem; line-height: 1.5;">Masuk dengan Google untuk menyimpan riwayat obrolan Anda.</div>';
+  }
+  if (messagesStream) messagesStream.innerHTML = '';
+  if (welcomeHero) welcomeHero.classList.remove('hidden');
+  if (activeConvTitle) activeConvTitle.textContent = 'Obrolan Baru';
+
   updateGuestUI();
-  loadConversations();
+
+  setTimeout(() => {
+    isLoggingOut = false;
+  }, 400);
 }
 
 // Feature Cards
@@ -1025,7 +1089,9 @@ async function fetchSystemStatus() {
               avatar: session.user.user_metadata?.avatar_url || null
             });
           } else if (event === 'SIGNED_OUT') {
-            handleUserLoggedOut();
+            if (currentUser && !isLoggingOut) {
+              handleUserLoggedOut();
+            }
           }
         });
 
@@ -1072,6 +1138,11 @@ async function fetchSystemStatus() {
 }
 
 async function loadConversations() {
+  if (!currentUser) {
+    conversations = [];
+    renderConversationsList();
+    return;
+  }
   try {
     const res = await fetch('/api/conversations', {
       headers: { 'x-user-id': getActiveUserId() }
@@ -1086,8 +1157,18 @@ async function loadConversations() {
 
 function renderConversationsList() {
   conversationsList.innerHTML = '';
-  if (conversations.length === 0) {
-    conversationsList.innerHTML = '<div class="conv-skeleton">Belum ada obrolan.</div>';
+  if (!currentUser) {
+    conversationsList.innerHTML = `
+      <div class="conv-skeleton" style="padding: 24px 14px; text-align: center; color: var(--text-dim); font-size: 0.8rem; line-height: 1.55;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="margin-bottom: 8px; opacity: 0.6;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <div>Masuk dengan Google untuk mengaktifkan riwayat obrolan di Cloud.</div>
+      </div>
+    `;
+    return;
+  }
+
+  if (!conversations || conversations.length === 0) {
+    conversationsList.innerHTML = '<div class="conv-skeleton">Belum ada obrolan tersimpan.</div>';
     return;
   }
 
@@ -1108,19 +1189,70 @@ function renderConversationsList() {
     const titleSpan = document.createElement('span');
     titleSpan.className = 'conv-title-text';
     titleSpan.textContent = title;
+    titleSpan.title = 'Klik 2x untuk mengubah nama obrolan';
+
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'conv-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'conv-action-btn conv-edit-btn';
+    editBtn.title = 'Ubah Nama Obrolan';
+    editBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
 
     const delBtn = document.createElement('button');
-    delBtn.className = 'conv-delete-btn';
+    delBtn.className = 'conv-action-btn conv-delete-btn';
     delBtn.title = 'Hapus Obrolan';
-    delBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
-    
+    delBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+
+    const startInlineRename = (e) => {
+      if (e) e.stopPropagation();
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'conv-rename-input';
+      input.value = conv.title || 'Obrolan';
+
+      let isSaved = false;
+      const saveRename = async () => {
+        if (isSaved) return;
+        isSaved = true;
+        const newTitle = input.value.trim();
+        if (newTitle && newTitle !== conv.title) {
+          await renameConversation(conv.id, newTitle);
+        } else {
+          renderConversationsList();
+        }
+      };
+
+      input.addEventListener('keydown', (ke) => {
+        if (ke.key === 'Enter') {
+          ke.preventDefault();
+          saveRename();
+        } else if (ke.key === 'Escape') {
+          isSaved = true;
+          renderConversationsList();
+        }
+      });
+      input.addEventListener('blur', saveRename);
+      input.addEventListener('click', (ev) => ev.stopPropagation());
+
+      titleSpan.replaceWith(input);
+      input.focus();
+      input.select();
+    };
+
+    editBtn.addEventListener('click', startInlineRename);
+    titleSpan.addEventListener('dblclick', startInlineRename);
+
     delBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       deleteConversation(conv.id);
     });
 
+    actionsDiv.appendChild(editBtn);
+    actionsDiv.appendChild(delBtn);
+
     item.appendChild(titleSpan);
-    item.appendChild(delBtn);
+    item.appendChild(actionsDiv);
 
     item.addEventListener('click', () => {
       selectConversation(conv.id, conv.title);
@@ -1134,6 +1266,30 @@ function renderConversationsList() {
   }
 }
 
+async function renameConversation(id, newTitle) {
+  try {
+    const res = await fetch(`/api/conversations/${id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': getActiveUserId()
+      },
+      body: JSON.stringify({ title: newTitle })
+    });
+    if (res.ok) {
+      const conv = conversations.find(c => c.id === id);
+      if (conv) conv.title = newTitle;
+      if (currentConversationId === id) {
+        activeConvTitle.textContent = newTitle;
+      }
+      renderConversationsList();
+    }
+  } catch (err) {
+    console.error('Gagal mengubah nama obrolan:', err);
+    renderConversationsList();
+  }
+}
+
 async function selectConversation(id, title) {
   currentConversationId = id;
   activeConvTitle.textContent = title || 'Obrolan';
@@ -1143,7 +1299,9 @@ async function selectConversation(id, title) {
   sidebar.classList.remove('open');
 
   try {
-    const res = await fetch(`/api/conversations/${id}/messages`);
+    const res = await fetch(`/api/conversations/${id}/messages`, {
+      headers: { 'x-user-id': getActiveUserId() }
+    });
     const messages = await res.json();
     renderMessages(messages);
   } catch (err) {
@@ -1189,7 +1347,7 @@ function renderMessages(messages) {
 
   welcomeHero.classList.add('hidden');
   messages.forEach(msg => {
-    appendMessageToStream(msg.role, msg.content, false);
+    appendMessageToStream(msg.role, msg.content, false, [], false, msg.id);
   });
   scrollToBottom(true);
 }
@@ -1331,17 +1489,71 @@ function postProcessAiBubble(bubble, sources = []) {
   }
 }
 
-function appendMessageToStream(role, content, autoPlayAudio = false, sources = [], animateTypewriter = false) {
+function appendMessageToStream(role, content, autoPlayAudio = false, sources = [], animateTypewriter = false, msgId = null) {
   welcomeHero.classList.add('hidden');
 
   const row = document.createElement('div');
   row.className = `message-row ${role === 'user' ? 'user' : 'ai'}`;
 
   if (role === 'user') {
+    if (msgId) row.dataset.msgId = msgId;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'user-message-wrapper';
+
     const bubble = document.createElement('div');
     bubble.className = 'user-bubble';
     bubble.textContent = content;
-    row.appendChild(bubble);
+
+    const actions = document.createElement('div');
+    actions.className = 'user-bubble-actions';
+
+    // Edit button
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn-user-action btn-user-edit';
+    editBtn.title = 'Edit Pesan & Kirim Ulang';
+    editBtn.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 20h9"/>
+        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+      </svg>
+      <span>Edit</span>
+    `;
+
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn-user-action btn-user-copy';
+    copyBtn.title = 'Salin Teks';
+    copyBtn.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+      </svg>
+      <span>Salin</span>
+    `;
+
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(bubble.textContent).then(() => {
+        const span = copyBtn.querySelector('span');
+        if (span) span.textContent = 'Tersalin!';
+        setTimeout(() => {
+          if (span) span.textContent = 'Salin';
+        }, 1800);
+      });
+    });
+
+    editBtn.addEventListener('click', () => {
+      startEditUserMessage(row, wrapper, bubble, actions);
+    });
+
+    actions.appendChild(editBtn);
+    actions.appendChild(copyBtn);
+
+    wrapper.appendChild(bubble);
+    wrapper.appendChild(actions);
+    row.appendChild(wrapper);
   } else {
     const avatar = document.createElement('div');
     avatar.className = 'ai-avatar';
@@ -1514,6 +1726,156 @@ function appendMessageToStream(role, content, autoPlayAudio = false, sources = [
 
   messagesStream.appendChild(row);
   scrollToBottom();
+  return row;
+}
+
+function startEditUserMessage(row, wrapper, bubble, actions) {
+  const originalText = bubble.textContent;
+
+  const editContainer = document.createElement('div');
+  editContainer.className = 'user-edit-container';
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'user-edit-textarea';
+  textarea.value = originalText;
+  textarea.rows = 3;
+
+  const footer = document.createElement('div');
+  footer.className = 'user-edit-footer';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'btn-edit-cancel';
+  cancelBtn.textContent = 'Batal';
+
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'button';
+  submitBtn.className = 'btn-edit-submit';
+  submitBtn.innerHTML = `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+    <span>Simpan & Kirim</span>
+  `;
+
+  footer.appendChild(cancelBtn);
+  footer.appendChild(submitBtn);
+
+  editContainer.appendChild(textarea);
+  editContainer.appendChild(footer);
+
+  bubble.style.display = 'none';
+  actions.style.display = 'none';
+  wrapper.appendChild(editContainer);
+
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+  const autoResize = () => {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.max(70, textarea.scrollHeight) + 'px';
+  };
+  textarea.addEventListener('input', autoResize);
+  autoResize();
+
+  const closeEdit = () => {
+    editContainer.remove();
+    bubble.style.display = '';
+    actions.style.display = '';
+  };
+
+  cancelBtn.addEventListener('click', closeEdit);
+
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeEdit();
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submitBtn.click();
+    }
+  });
+
+  submitBtn.addEventListener('click', async () => {
+    const newText = textarea.value.trim();
+    if (!newText) return;
+
+    if (newText === originalText) {
+      closeEdit();
+      return;
+    }
+
+    const msgId = row.dataset.msgId;
+    if (!msgId || !currentConversationId) {
+      bubble.textContent = newText;
+      closeEdit();
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="status-dot warning"></span> Mengirim...';
+
+    try {
+      // Remove all elements in stream after this user message row
+      let next = row.nextElementSibling;
+      while (next) {
+        const toDel = next;
+        next = next.nextElementSibling;
+        toDel.remove();
+      }
+
+      // Update text in bubble
+      bubble.textContent = newText;
+      closeEdit();
+
+      // Show loading indicator
+      const loadingRow = document.createElement('div');
+      loadingRow.className = 'message-row ai';
+      loadingRow.id = 'aiLoadingRow';
+      loadingRow.innerHTML = `
+        <div class="ai-avatar">Sona</div>
+        <div class="ai-bubble-wrapper">
+          <div class="ai-bubble" style="color: var(--text-dim); display: flex; align-items: center; gap: 8px;">
+            <span class="status-dot warning"></span> SonaAI sedang berpikir...
+          </div>
+        </div>
+      `;
+      messagesStream.appendChild(loadingRow);
+      scrollToBottom(true);
+
+      const res = await fetch(`/api/conversations/${currentConversationId}/messages/${msgId}/edit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': getActiveUserId()
+        },
+        body: JSON.stringify({
+          content: newText,
+          model: modelSelect ? modelSelect.value : 'gemini-3.5-flash-lite',
+          apiKey: localStorage.getItem('sona_gemini_key') || undefined,
+          groqApiKey: localStorage.getItem('sona_groq_key') || undefined,
+          openrouterApiKey: localStorage.getItem('sona_openrouter_key') || undefined,
+          webSearch: isWebSearchActive
+        })
+      });
+
+      const data = await res.json();
+      loadingRow.remove();
+
+      if (data.error) {
+        appendMessageToStream('model', `⚠️ Error: ${data.error}`, false);
+        return;
+      }
+
+      const shouldSpeak = autoSpeakCheck && autoSpeakCheck.checked;
+      appendMessageToStream('model', data.reply, shouldSpeak, data.sources, true, data.aiMessage?.id);
+
+      // Refresh sidebar list
+      await loadConversations();
+    } catch (err) {
+      console.error('Gagal edit pesan:', err);
+      const loadingRow = document.getElementById('aiLoadingRow');
+      if (loadingRow) loadingRow.remove();
+      appendMessageToStream('model', `⚠️ Gagal mengirim pesan yang diedit: ${err.message}`, false);
+    }
+  });
 }
 
 function isScrolledNearBottom(threshold = 20) {
@@ -1625,9 +1987,15 @@ async function handleSendMessage(text) {
   updateScrollPillVisibility();
 
   // Add user message to UI
-  appendMessageToStream('user', message, false);
+  const userRow = appendMessageToStream('user', message, false);
   messageInput.value = '';
   autoResizeTextarea();
+
+  // Track ephemeral in-memory guest messages
+  if (!currentUser) {
+    guestSessionMessages.push({ role: 'user', content: message });
+    try { sessionStorage.setItem('sona_guest_messages', JSON.stringify(guestSessionMessages)); } catch (_) {}
+  }
 
   // Create loading placeholder for AI
   const loadingRow = document.createElement('div');
@@ -1654,9 +2022,10 @@ async function handleSendMessage(text) {
         'x-user-id': getActiveUserId()
       },
       body: JSON.stringify({
-        conversationId: currentConversationId,
+        conversationId: currentUser ? currentConversationId : null,
         userId: getActiveUserId(),
         message,
+        history: !currentUser ? guestSessionMessages.slice(0, -1) : undefined,
         model: modelSelect.value,
         apiKey: localStorage.getItem('sona_gemini_key') || undefined,
         groqApiKey: localStorage.getItem('sona_groq_key') || undefined,
@@ -1673,13 +2042,26 @@ async function handleSendMessage(text) {
       return;
     }
 
+    if (!currentUser) {
+      guestSessionMessages.push({ role: 'model', content: data.reply });
+      try { sessionStorage.setItem('sona_guest_messages', JSON.stringify(guestSessionMessages)); } catch (_) {}
+    }
+
+    if (data.userMessage && data.userMessage.id && userRow) {
+      userRow.dataset.msgId = data.userMessage.id;
+    }
+
     // Update conversation state
-    currentConversationId = data.conversationId;
+    if (currentUser) {
+      currentConversationId = data.conversationId;
+    }
     const shouldSpeak = autoSpeakCheck && autoSpeakCheck.checked;
-    appendMessageToStream('model', data.reply, shouldSpeak, data.sources, true);
+    appendMessageToStream('model', data.reply, shouldSpeak, data.sources, true, data.aiMessage?.id);
 
     // Refresh conversation list to get updated titles/times
-    await loadConversations();
+    if (currentUser) {
+      await loadConversations();
+    }
 
     // Guest Trial Tracking
     if (!currentUser) {
@@ -2824,7 +3206,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      const res = await fetch(`/api/conversations/${currentConversationId}/messages`);
+      const res = await fetch(`/api/conversations/${currentConversationId}/messages`, {
+        headers: { 'x-user-id': getActiveUserId() }
+      });
       const messages = await res.json();
       if (!messages || messages.length === 0) {
         alert('Obrolan ini belum memiliki pesan untuk diekspor.');

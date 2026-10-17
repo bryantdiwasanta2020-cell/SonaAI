@@ -12,7 +12,10 @@ import {
   deleteConversation,
   getMessages,
   addMessage,
-  updateMessageContent
+  updateMessageContent,
+  deleteMessagesAfter,
+  deleteMessage,
+  migrateGuestConversation
 } from './src/db.js';
 import {
   generateChatResponse,
@@ -128,6 +131,9 @@ const getUserId = (req) => req.headers['x-user-id'] || req.query.userId || req.b
 app.get('/api/conversations', async (req, res) => {
   try {
     const userId = getUserId(req);
+    if (!userId) {
+      return res.json([]); // ZERO-LEAK PRIVACY: Never expose DB chats to guests
+    }
     const list = await getConversations(userId);
     res.json(list);
   } catch (error) {
@@ -140,6 +146,9 @@ app.post('/api/conversations', async (req, res) => {
   try {
     const { title = 'Obrolan Baru', model = 'gemini-3.8-flash' } = req.body;
     const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ error: 'Harap login untuk membuat percakapan permanen.' });
+    }
     const id = 'conv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
     const conv = await createConversation(id, title, model, userId);
     res.json(conv);
@@ -153,8 +162,30 @@ app.delete('/api/conversations/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ error: 'Harap login.' });
+    }
     await deleteConversation(id, userId);
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 5b. Rename Conversation Title
+app.patch('/api/conversations/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title } = req.body;
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ error: 'Harap login.' });
+    }
+    if (!title || !title.trim()) {
+      return res.status(400).json({ error: 'Judul tidak boleh kosong.' });
+    }
+    await updateConversationTitle(id, title.trim(), userId);
+    res.json({ success: true, id, title: title.trim() });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -164,8 +195,115 @@ app.delete('/api/conversations/:id', async (req, res) => {
 app.get('/api/conversations/:id/messages', async (req, res) => {
   try {
     const { id } = req.params;
-    const messages = await getMessages(id);
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.json([]); // Guests cannot read DB messages
+    }
+    const messages = await getMessages(id, userId);
     res.json(messages);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 6e. Migrate Guest In-Memory Messages to User Account Upon Login
+app.post('/api/conversations/migrate', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ error: 'Harap login terlebih dahulu untuk migrasi riwayat.' });
+    }
+    const { guestMessages = [], model = 'gemini-3.8-flash' } = req.body;
+    if (!guestMessages || guestMessages.length === 0) {
+      return res.json({ success: true, conversation: null });
+    }
+    const conv = await migrateGuestConversation(userId, guestMessages, model);
+    res.json({ success: true, conversation: conv });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 6b. Edit Message Content (Text Only)
+app.patch('/api/conversations/:conversationId/messages/:messageId', async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { content } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ error: 'Konten pesan tidak boleh kosong.' });
+    }
+    await updateMessageContent(messageId, content.trim());
+    res.json({ success: true, messageId, content: content.trim() });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 6c. Delete Individual Message
+app.delete('/api/conversations/:conversationId/messages/:messageId', async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    await deleteMessage(messageId);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 6d. Edit Prompt and Regenerate AI Response (ChatGPT / Claude Style)
+app.post('/api/conversations/:conversationId/messages/:messageId/edit', async (req, res) => {
+  try {
+    const { conversationId, messageId } = req.params;
+    const {
+      content,
+      model = 'gemini-3.5-flash-lite',
+      webSearch = false,
+      language
+    } = req.body;
+
+    if (!content || !content.trim()) {
+      return res.status(400).json({ error: 'Pesan tidak boleh kosong.' });
+    }
+
+    const trimmedContent = content.trim();
+
+    // 1. Update this user message content in database
+    await updateMessageContent(messageId, trimmedContent);
+
+    // 2. Delete all subsequent messages in this thread (branching prune)
+    await deleteMessagesAfter(conversationId, messageId);
+
+    // 3. Fetch prior history up to this point
+    const history = await getMessages(conversationId);
+
+    const apiKey = req.body.apiKey || req.headers['x-gemini-key'];
+    const groqApiKey = req.body.groqApiKey || req.headers['x-groq-key'];
+    const openrouterApiKey = req.body.openrouterApiKey || req.headers['x-openrouter-key'];
+
+    // 4. Generate new AI response based on updated prompt & prior history
+    const aiResult = await generateChatResponse({
+      prompt: trimmedContent,
+      history: history.slice(0, -1), // prior turns before this edited message
+      model,
+      apiKey,
+      groqApiKey,
+      openrouterApiKey,
+      webSearch: !!webSearch,
+      language
+    });
+
+    // 5. Save the newly generated AI reply
+    const aiMsg = await addMessage(conversationId, 'model', aiResult.text);
+
+    res.json({
+      success: true,
+      conversationId,
+      messageId,
+      userMessage: { id: messageId, role: 'user', content: trimmedContent },
+      reply: aiResult.text,
+      aiMessage: aiMsg,
+      sources: aiResult.sources || []
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -198,6 +336,37 @@ app.post('/api/chat', async (req, res) => {
     const summaryText = hasText ? message : 'Pesan Suara';
     const displayMsg = hasText ? message : '[Pesan Suara]';
 
+    const apiKey = req.body.apiKey || req.headers['x-gemini-key'];
+    const groqApiKey = req.body.groqApiKey || req.headers['x-groq-key'];
+    const openrouterApiKey = req.body.openrouterApiKey || req.headers['x-openrouter-key'];
+
+    // 1. GUEST MODE: ZERO DB WRITES - PURE IN-MEMORY SESSION
+    if (!userId) {
+      const guestHistory = Array.isArray(req.body.history) ? req.body.history : [];
+      const aiResult = await generateChatResponse({
+        prompt: message || '',
+        audioBase64,
+        audioMimeType,
+        history: guestHistory,
+        model,
+        apiKey,
+        groqApiKey,
+        openrouterApiKey,
+        webSearch: !!webSearch,
+        language
+      });
+
+      return res.json({
+        conversationId: 'guest_session',
+        userMessage: { role: 'user', content: displayMsg },
+        userTranscription: aiResult.userTranscription || '',
+        reply: aiResult.text,
+        sources: aiResult.sources || [],
+        isGuest: true
+      });
+    }
+
+    // 2. AUTHENTICATED USER: Save to Cloud Database
     if (!conversationId) {
       conversationId = 'conv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
       const titleSummary = summaryText.length > 28 ? summaryText.substring(0, 28) + '...' : summaryText;
@@ -209,11 +378,7 @@ app.post('/api/chat', async (req, res) => {
     const userMsg = await addMessage(conversationId, 'user', displayMsg);
 
     // Get message history for context
-    const history = await getMessages(conversationId);
-
-    const apiKey = req.body.apiKey || req.headers['x-gemini-key'];
-    const groqApiKey = req.body.groqApiKey || req.headers['x-groq-key'];
-    const openrouterApiKey = req.body.openrouterApiKey || req.headers['x-openrouter-key'];
+    const history = await getMessages(conversationId, userId);
 
     // Call Multi-Provider AI (Gemini, Groq, or OpenRouter)
     const aiResult = await generateChatResponse({

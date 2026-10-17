@@ -136,12 +136,14 @@ export function getDBStatus() {
 }
 
 export async function getConversations(userId = null) {
+  // ZERO-LEAK PRIVACY: If no userId (guest), NEVER return database conversations
+  if (!userId) {
+    return [];
+  }
+
   if (dbMode === 'supabase_https') {
     try {
-      let endpoint = '/conversations?select=*&order=updated_at.desc';
-      if (userId) {
-        endpoint += `&user_id=eq.${encodeURIComponent(userId)}`;
-      }
+      const endpoint = `/conversations?select=*&user_id=eq.${encodeURIComponent(userId)}&order=updated_at.desc`;
       const data = await supabaseFetch(endpoint);
       return data || [];
     } catch (e) {
@@ -150,23 +152,38 @@ export async function getConversations(userId = null) {
   }
 
   if (dbConnected && pool) {
-    if (userId) {
-      const res = await pool.query(
-        'SELECT id, title, model, user_id, created_at, updated_at FROM conversations WHERE user_id = $1 ORDER BY updated_at DESC',
-        [userId]
-      );
-      return res.rows;
-    }
     const res = await pool.query(
-      'SELECT id, title, model, user_id, created_at, updated_at FROM conversations ORDER BY updated_at DESC'
+      'SELECT id, title, model, user_id, created_at, updated_at FROM conversations WHERE user_id = $1 ORDER BY updated_at DESC',
+      [userId]
     );
     return res.rows;
   }
 
-  const list = userId 
-    ? memoryStore.conversations.filter(c => c.user_id === userId)
-    : memoryStore.conversations;
+  const list = memoryStore.conversations.filter(c => c.user_id === userId);
   return [...list].sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+}
+
+export async function migrateGuestConversation(userId, guestMessages = [], model = 'gemini-3.8-flash') {
+  if (!userId || !Array.isArray(guestMessages) || guestMessages.length === 0) {
+    return null;
+  }
+
+  const firstUserMsg = guestMessages.find(m => m.role === 'user');
+  const summaryText = firstUserMsg?.content || 'Obrolan Tamu';
+  const title = summaryText.length > 28 ? summaryText.substring(0, 28) + '...' : summaryText;
+  const conversationId = 'conv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+  // 1. Create the conversation belonging to this user
+  const conv = await createConversation(conversationId, title, model, userId);
+
+  // 2. Add each message into this conversation
+  for (const msg of guestMessages) {
+    if (msg.role && msg.content) {
+      await addMessage(conversationId, msg.role, msg.content);
+    }
+  }
+
+  return conv;
 }
 
 export async function createConversation(id, title = 'Obrolan Baru', model = 'gemini-3.8-flash', userId = null) {
@@ -205,34 +222,47 @@ export async function createConversation(id, title = 'Obrolan Baru', model = 'ge
   return conv;
 }
 
-export async function updateConversationTitle(id, title) {
+export async function updateConversationTitle(id, title, userId = null) {
   const now = new Date().toISOString();
 
   if (dbMode === 'supabase_https') {
     try {
-      await supabaseFetch(`/conversations?id=eq.${encodeURIComponent(id)}`, {
+      let endpoint = `/conversations?id=eq.${encodeURIComponent(id)}`;
+      if (userId) {
+        endpoint += `&user_id=eq.${encodeURIComponent(userId)}`;
+      }
+      await supabaseFetch(endpoint, {
         method: 'PATCH',
         body: JSON.stringify({ title, updated_at: now })
       });
-      return;
+      return true;
     } catch (e) {
       console.error('Supabase HTTPS updateConversationTitle error:', e.message);
     }
   }
 
   if (dbConnected && pool) {
-    await pool.query(
-      'UPDATE conversations SET title = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [title, id]
-    );
-    return;
+    if (userId) {
+      await pool.query(
+        'UPDATE conversations SET title = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND (user_id = $3 OR user_id IS NULL)',
+        [title, id, userId]
+      );
+    } else {
+      await pool.query(
+        'UPDATE conversations SET title = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        [title, id]
+      );
+    }
+    return true;
   }
 
   const conv = memoryStore.conversations.find(c => c.id === id);
   if (conv) {
     conv.title = title;
     conv.updated_at = new Date();
+    return true;
   }
+  return false;
 }
 
 export async function deleteConversation(id, userId = null) {
@@ -263,9 +293,13 @@ export async function deleteConversation(id, userId = null) {
   return true;
 }
 
-export async function getMessages(conversationId) {
+export async function getMessages(conversationId, userId = null) {
   if (dbMode === 'supabase_https') {
     try {
+      if (userId) {
+        const conv = await supabaseFetch(`/conversations?id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(userId)}`);
+        if (!conv || conv.length === 0) return [];
+      }
       const data = await supabaseFetch(
         `/messages?conversation_id=eq.${encodeURIComponent(conversationId)}&order=id.asc`
       );
@@ -276,6 +310,10 @@ export async function getMessages(conversationId) {
   }
 
   if (dbConnected && pool) {
+    if (userId) {
+      const convCheck = await pool.query('SELECT id FROM conversations WHERE id = $1 AND user_id = $2', [conversationId, userId]);
+      if (convCheck.rows.length === 0) return [];
+    }
     const res = await pool.query(
       'SELECT id, conversation_id, role, content, created_at FROM messages WHERE conversation_id = $1 ORDER BY id ASC',
       [conversationId]
@@ -283,6 +321,10 @@ export async function getMessages(conversationId) {
     return res.rows;
   }
 
+  if (userId) {
+    const conv = memoryStore.conversations.find(c => c.id === conversationId && c.user_id === userId);
+    if (!conv) return [];
+  }
   return memoryStore.messages.filter(m => m.conversation_id === conversationId);
 }
 
@@ -369,4 +411,56 @@ export async function updateMessageContent(id, content) {
     return true;
   }
   return false;
+}
+
+export async function deleteMessagesAfter(conversationId, messageId) {
+  if (dbMode === 'supabase_https') {
+    try {
+      await supabaseFetch(
+        `/messages?conversation_id=eq.${encodeURIComponent(conversationId)}&id=gt.${encodeURIComponent(messageId)}`,
+        { method: 'DELETE' }
+      );
+      return true;
+    } catch (e) {
+      console.error('Supabase HTTPS deleteMessagesAfter error:', e.message);
+    }
+  }
+
+  if (dbConnected && pool) {
+    try {
+      await pool.query(
+        'DELETE FROM messages WHERE conversation_id = $1 AND id > $2',
+        [conversationId, messageId]
+      );
+      return true;
+    } catch (e) {
+      console.error('Postgres deleteMessagesAfter error:', e.message);
+    }
+  }
+
+  memoryStore.messages = memoryStore.messages.filter(
+    m => !(m.conversation_id === conversationId && Number(m.id) > Number(messageId))
+  );
+  return true;
+}
+
+export async function deleteMessage(messageId) {
+  if (dbMode === 'supabase_https') {
+    try {
+      await supabaseFetch(`/messages?id=eq.${encodeURIComponent(messageId)}`, { method: 'DELETE' });
+      return true;
+    } catch (e) {
+      console.error('Supabase HTTPS deleteMessage error:', e.message);
+    }
+  }
+
+  if (dbConnected && pool) {
+    try {
+      await pool.query('DELETE FROM messages WHERE id = $1', [messageId]);
+      return true;
+    } catch (_) {}
+  }
+
+  memoryStore.messages = memoryStore.messages.filter(m => m.id != messageId);
+  return true;
 }
