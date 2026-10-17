@@ -467,7 +467,28 @@ function getIndoVoiceScore(v) {
   if (name.includes('google')) score += 80;                              // Chrome Google Bahasa Indonesia (Neural Online)
   if (name.includes('enhanced') || name.includes('premium')) score += 60; // Apple Damayanti (Enhanced / Premium)
   if (name.includes('siri')) score += 50;
-  if (name.includes('compact')) score -= 15;                             // Old formant synthesizer with mechanical tremor
+  if (name.includes('compact')) score -= 40;                             // Old formant synthesizer with mechanical tremor
+  return score;
+}
+
+// Helper to score English voice fidelity (prioritize smooth neural voices; penalize trembling compact Mac voices)
+function getEnglishVoiceScore(v) {
+  if (!v) return -1;
+  const name = (v.name || '').toLowerCase();
+  const lang = (v.lang || '').toLowerCase();
+  if (!lang.startsWith('en')) return -1;
+
+  let score = 20;
+  if (name.includes('natural') || name.includes('online')) score += 100; // Microsoft Natural (Jenny / Aria)
+  if (name.includes('google us english') || name.includes('google')) score += 85; // Chrome Neural Online (Zero tremor)
+  if (name.includes('enhanced') || name.includes('premium')) score += 70; // Apple Siri / Enhanced
+  if (name.includes('siri')) score += 60;
+  if (name.includes('ava') || name.includes('allison') || name.includes('zoe') || name.includes('karen')) score += 30;
+
+  // Strongly penalize legacy compact synthesizers (Samantha Compact / Victoria Compact) which have robotic vibrato/tremor
+  if (name.includes('compact')) score -= 60;
+  if (name.includes('samantha') && !name.includes('enhanced') && !name.includes('premium')) score -= 35;
+  if (name.includes('victoria') && !name.includes('enhanced') && !name.includes('premium')) score -= 35;
   return score;
 }
 
@@ -521,17 +542,14 @@ function initTextToSpeech() {
     const savedVoiceName = localStorage.getItem('sona_voice') || '';
 
     // Classify and sort:
-    // 1. Indonesian voices (Highest fidelity first: Google/Natural -> Enhanced -> Compact)
-    // 2. Recommended US Female Career voices (Samantha, Ava, Allison, Victoria, Google US English)
-    // 3. Other English voices
-    // 4. Other languages
+    // 1. Indonesian voices (Highest fidelity first: Google/Natural -> Enhanced)
+    // 2. High-fidelity Smooth English voices (Google US English, Edge Natural, Siri/Enhanced)
+    // 3. Other voices
     const getRank = (v) => {
       const indoScore = getIndoVoiceScore(v);
-      if (indoScore > 0) return 1 - (indoScore / 200); // 0.4 to 0.9 (highest priority for Indonesian users)
-      const nameLower = v.name.toLowerCase();
-      const isCareerUsFemale = CAREER_US_FEMALE_VOICES.some(n => nameLower.includes(n)) && v.lang.startsWith('en');
-      if (isCareerUsFemale) return 2;
-      if (v.lang.startsWith('en')) return 3;
+      if (indoScore > 0) return 1 - (indoScore / 200); // highest priority
+      const engScore = getEnglishVoiceScore(v);
+      if (engScore > 0) return 2 - (engScore / 200);
       return 4;
     };
 
@@ -541,40 +559,32 @@ function initTextToSpeech() {
       const opt = document.createElement('option');
       opt.value = v.name;
       const indoScore = getIndoVoiceScore(v);
-      const nameLower = v.name.toLowerCase();
-      const isCareerUsFemale = CAREER_US_FEMALE_VOICES.some(n => nameLower.includes(n)) && v.lang.startsWith('en');
+      const engScore = getEnglishVoiceScore(v);
 
       if (indoScore >= 70) {
         opt.textContent = `${v.name} (Bahasa Indonesia - Jernih)`;
       } else if (indoScore > 0) {
-        if (nameLower.includes('compact')) {
-          opt.textContent = `${v.name} (Bahasa Indonesia - Standar)`;
-        } else {
-          opt.textContent = `${v.name} (${v.lang})`;
-        }
-      } else if (isCareerUsFemale) {
-        opt.textContent = `${v.name} (English US - Natural)`;
+        opt.textContent = `${v.name} (Bahasa Indonesia)`;
+      } else if (engScore >= 70) {
+        opt.textContent = `${v.name} (English - Halus & Natural)`;
       } else {
         opt.textContent = `${v.name} (${v.lang})`;
       }
       voiceSelect.appendChild(opt);
     });
 
-    // Auto-select preferred voice: saved preference -> or highest fidelity Indo voice -> or US Career female
+    // Auto-select preferred voice: saved preference -> or highest fidelity Indo voice -> or smooth English voice
     if (savedVoiceName && voices.some(v => v.name === savedVoiceName)) {
       voiceSelect.value = savedVoiceName;
     } else {
       const bestIndo = sorted.find(v => getIndoVoiceScore(v) >= 70);
+      const bestEng = sorted.find(v => getEnglishVoiceScore(v) >= 70);
       const fallbackIndo = sorted.find(v => getIndoVoiceScore(v) > 0);
-      const bestFemaleUs = sorted.find(v => {
-        const nameLower = v.name.toLowerCase();
-        return CAREER_US_FEMALE_VOICES.some(n => nameLower.includes(n)) && v.lang.startsWith('en');
-      });
 
       if (bestIndo) {
         voiceSelect.value = bestIndo.name;
-      } else if (bestFemaleUs) {
-        voiceSelect.value = bestFemaleUs.name;
+      } else if (bestEng) {
+        voiceSelect.value = bestEng.name;
       } else if (fallbackIndo) {
         voiceSelect.value = fallbackIndo.name;
       }
@@ -646,15 +656,17 @@ function speakText(text, onComplete = null) {
   let chosenVoice = null;
 
   if (detectedLang === 'en') {
-    // English text: Prioritize authentic US Career Female Voice (Samantha, Ava, Victoria, etc.)
+    // English text: Prioritize silky smooth neural English voices over trembling compact voices
     if (selectedVoiceName) {
-      chosenVoice = voices.find(v => v.name === selectedVoiceName && v.lang.startsWith('en'));
+      const match = voices.find(v => v.name === selectedVoiceName && v.lang.startsWith('en'));
+      if (match && getEnglishVoiceScore(match) > 30) {
+        chosenVoice = match;
+      }
     }
     if (!chosenVoice) {
-      chosenVoice = voices.find(v => {
-        const nameLower = v.name.toLowerCase();
-        return CAREER_US_FEMALE_VOICES.some(n => nameLower.includes(n)) && v.lang.startsWith('en');
-      }) || voices.find(v => v.lang.startsWith('en'));
+      const engVoices = voices.filter(v => getEnglishVoiceScore(v) > 0);
+      engVoices.sort((a, b) => getEnglishVoiceScore(b) - getEnglishVoiceScore(a));
+      chosenVoice = engVoices[0] || voices.find(v => v.lang.startsWith('en')) || null;
     }
   } else {
     // Indonesian text: Prioritize natural neural/enhanced voices over raspy compact ones
@@ -3434,7 +3446,10 @@ document.addEventListener('DOMContentLoaded', () => {
       testVoiceBtn.classList.add('testing');
       testVoiceBtn.querySelector('span').textContent = 'Memutar...';
 
-      const phrase = "Hello! I am Sona. I'm ready to assist you with intelligence, poise, and elegance.";
+      const isEng = voiceSelect.value ? (voiceSelect.value.toLowerCase().includes('english') || voiceSelect.value.toLowerCase().includes('us')) : false;
+      const phrase = isEng
+        ? "Hello! I am Sona. I'm ready to assist you with intelligence and elegance."
+        : "Halo! Saya Sona. Senang bisa mengobrol dan membantumu hari ini!";
       speakText(phrase, () => {
         testVoiceBtn.classList.remove('testing');
         testVoiceBtn.querySelector('span').textContent = 'Tes Suara';
