@@ -62,8 +62,8 @@ function buildLanguageInstruction(language) {
   return instruction;
 }
 
-// Convert history to OpenAI standard format
-function formatOpenAiMessages(history, prompt, language) {
+// Convert history to OpenAI standard format with optional multimodal file support
+function formatOpenAiMessages(history, prompt, language, fileBase64 = null, fileMimeType = null, fileName = null) {
   const messages = [
     { role: 'system', content: buildLanguageInstruction(language) }
   ];
@@ -76,8 +76,36 @@ function formatOpenAiMessages(history, prompt, language) {
     });
   }
 
-  if (prompt && prompt.trim()) {
-    messages.push({ role: 'user', content: prompt });
+  let finalPrompt = prompt || '';
+
+  // If text or code file, extract content and append to prompt
+  if (fileBase64 && (!fileMimeType || (!fileMimeType.startsWith('image/') && fileMimeType !== 'application/pdf'))) {
+    try {
+      const decodedText = Buffer.from(fileBase64, 'base64').toString('utf-8');
+      const ext = (fileName || 'file').split('.').pop();
+      finalPrompt = `[Lampiran File: ${fileName || 'Dokumen'}]\n\`\`\`${ext}\n${decodedText}\n\`\`\`\n\n${finalPrompt}`;
+    } catch (_) {}
+  }
+
+  if (!finalPrompt.trim() && fileBase64) {
+    finalPrompt = 'Analisis dan jelaskan isi file/gambar yang saya lampirkan ini secara rinci dan terstruktur.';
+  }
+
+  if (fileBase64 && fileMimeType && fileMimeType.startsWith('image/')) {
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: finalPrompt },
+        {
+          type: 'image_url',
+          image_url: {
+            url: `data:${fileMimeType};base64,${fileBase64}`
+          }
+        }
+      ]
+    });
+  } else if (finalPrompt.trim()) {
+    messages.push({ role: 'user', content: finalPrompt });
   }
 
   return messages;
@@ -117,14 +145,14 @@ async function transcribeAudioWithGroq(audioBase64, mimeType, groqKey, language)
 }
 
 // 2. Groq Chat API
-async function generateGroqResponse({ model, prompt, history, groqKey, language }) {
+async function generateGroqResponse({ model, prompt, history, groqKey, language, fileBase64, fileMimeType, fileName }) {
   let realModel = model.replace(/^groq:/, '').trim() || 'qwen/qwen3.8-27b';
   // Graceful alias mapping if legacy names are selected
   if (realModel === 'llama-3.3-70b-versatile' || realModel.includes('llama')) {
     realModel = 'qwen/qwen3.8-27b';
   }
 
-  const messages = formatOpenAiMessages(history, prompt, language);
+  const messages = formatOpenAiMessages(history, prompt, language, fileBase64, fileMimeType, fileName);
 
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -154,12 +182,12 @@ async function generateGroqResponse({ model, prompt, history, groqKey, language 
 }
 
 // === OPENROUTER INTEGRATION ===
-async function generateOpenRouterResponse({ model, prompt, history, openrouterKey, language }) {
+async function generateOpenRouterResponse({ model, prompt, history, openrouterKey, language, fileBase64, fileMimeType, fileName }) {
   let realModel = model.replace(/^openrouter:/, '').trim() || 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free';
   if (realModel.includes('deepseek') && realModel.includes(':free')) {
     realModel = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free';
   }
-  const messages = formatOpenAiMessages(history, prompt, language);
+  const messages = formatOpenAiMessages(history, prompt, language, fileBase64, fileMimeType, fileName);
 
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -196,6 +224,9 @@ export async function generateChatResponse({
   prompt,
   audioBase64 = null,
   audioMimeType = null,
+  fileBase64 = null,
+  fileMimeType = null,
+  fileName = null,
   history = [],
   model = 'gemini-3.5-flash-lite',
   apiKey = null,
@@ -206,6 +237,7 @@ export async function generateChatResponse({
 }) {
   const targetModel = model || 'gemini-3.5-flash-lite';
   const hasAudio = !!(audioBase64 && audioBase64.trim());
+  const hasFile = !!(fileBase64 && fileBase64.trim());
 
   // ----------------------------------------------------
   // ROUTE 1: GROQ PROVIDER
@@ -235,7 +267,10 @@ export async function generateChatResponse({
         prompt: resolvedPrompt,
         history,
         groqKey: activeGroqKey,
-        language
+        language,
+        fileBase64,
+        fileMimeType,
+        fileName
       });
 
       return {
@@ -256,6 +291,9 @@ export async function generateChatResponse({
           const fallbackRes = await generateChatResponse({
             prompt: resolvedPrompt || prompt,
             audioBase64: null,
+            fileBase64,
+            fileMimeType,
+            fileName,
             history,
             model: 'gemini-3.5-flash-lite',
             apiKey: geminiKey,
@@ -300,7 +338,6 @@ export async function generateChatResponse({
     let userTranscription = '';
 
     try {
-
       // If audio is provided, try Groq Whisper first, then Gemini if available
       if (hasAudio) {
         const groqKey = (groqApiKey || getGroqApiKey()).trim();
@@ -331,7 +368,10 @@ export async function generateChatResponse({
         prompt: resolvedPrompt,
         history,
         openrouterKey: activeOpenRouterKey,
-        language
+        language,
+        fileBase64,
+        fileMimeType,
+        fileName
       });
 
       return {
@@ -352,6 +392,9 @@ export async function generateChatResponse({
           const fallbackRes = await generateChatResponse({
             prompt: resolvedPrompt || prompt,
             audioBase64: null,
+            fileBase64,
+            fileMimeType,
+            fileName,
             history,
             model: 'gemini-3.5-flash-lite',
             apiKey: geminiKey,
@@ -379,7 +422,7 @@ export async function generateChatResponse({
   }
 
   // ----------------------------------------------------
-  // ROUTE 3: GOOGLE GEMINI PROVIDER (DEFAULT & NATIVE AUDIO)
+  // ROUTE 3: GOOGLE GEMINI PROVIDER (DEFAULT, NATIVE AUDIO & VISION)
   // ----------------------------------------------------
   const activeKey = apiKey || getApiKey();
 
@@ -405,8 +448,40 @@ export async function generateChatResponse({
       });
     }
 
-    // Append current user prompt or audio
+    // Append current user prompt, file, or audio
     const userParts = [];
+
+    // Handle attached file (Images, PDF, or text/code documents)
+    if (fileBase64) {
+      let resolvedMime = fileMimeType || '';
+      if ((!resolvedMime || resolvedMime === 'application/octet-stream') && fileName) {
+        const ext = fileName.split('.').pop().toLowerCase();
+        if (ext === 'pdf') resolvedMime = 'application/pdf';
+        else if (['jpg', 'jpeg'].includes(ext)) resolvedMime = 'image/jpeg';
+        else if (ext === 'png') resolvedMime = 'image/png';
+        else if (ext === 'webp') resolvedMime = 'image/webp';
+        else if (ext === 'gif') resolvedMime = 'image/gif';
+      }
+
+      if (resolvedMime && (resolvedMime.startsWith('image/') || resolvedMime === 'application/pdf')) {
+        userParts.push({
+          inlineData: {
+            mimeType: resolvedMime,
+            data: fileBase64
+          }
+        });
+      } else {
+        // Text / code / JSON / CSV documents
+        try {
+          const decodedText = Buffer.from(fileBase64, 'base64').toString('utf-8');
+          const ext = (fileName || 'file').split('.').pop();
+          userParts.push({
+            text: `[Lampiran File: ${fileName || 'Dokumen'}]\n\`\`\`${ext}\n${decodedText}\n\`\`\`\n`
+          });
+        } catch (_) {}
+      }
+    }
+
     if (audioBase64) {
       userParts.push({
         inlineData: {
@@ -427,7 +502,13 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
         });
       }
     } else {
-      userParts.push({ text: prompt || '' });
+      const defaultText = fileBase64
+        ? 'Analisis dan jelaskan isi file/gambar yang saya lampirkan ini secara rinci dan terstruktur.'
+        : '';
+      const textToSend = (prompt && prompt.trim()) ? prompt : defaultText;
+      if (textToSend) {
+        userParts.push({ text: textToSend });
+      }
     }
 
     formattedContents.push({
@@ -472,7 +553,7 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
 
     const delay = ms => new Promise(res => setTimeout(res, ms));
 
-    const fetchWithRetry = async (modelName, activeConfig = config, timeoutMs = 10000, maxRetries = 1) => {
+    const fetchWithRetry = async (modelName, activeConfig = config, timeoutMs = 35000, maxRetries = 1) => {
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
           const callPromise = ai.models.generateContent({
@@ -525,8 +606,11 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
       return { replyText, userTranscription };
     };
 
+    const mainTimeoutMs = hasFile ? 65000 : 35000;
+    const fallbackTimeoutMs = hasFile ? 50000 : 25000;
+
     try {
-      const response = await fetchWithRetry(targetModel, config, 12000, 1);
+      const response = await fetchWithRetry(targetModel, config, mainTimeoutMs, 1);
       const parsed = parseTranscriptionAndAnswer(response.text);
       const grounding = extractGrounding(response);
       return {
@@ -545,7 +629,7 @@ FORMAT OUTPUT (WAJIB DIIKUTI):
         try {
           const fallbackConfig = { ...config };
           delete fallbackConfig.tools; // Fallbacks without tools to guarantee speed
-          const fallbackResponse = await fetchWithRetry(altModel, fallbackConfig, 8000, 0);
+          const fallbackResponse = await fetchWithRetry(altModel, fallbackConfig, fallbackTimeoutMs, 0);
           const parsed = parseTranscriptionAndAnswer(fallbackResponse.text);
           const grounding = extractGrounding(fallbackResponse);
           return {

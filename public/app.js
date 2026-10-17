@@ -90,6 +90,7 @@ function stopOrbVisualizer() {
 }
 
 // DOM Elements
+const appLayout = document.getElementById('appLayout');
 const sidebar = document.getElementById('sidebar');
 const mobileMenuBtn = document.getElementById('mobileMenuBtn');
 const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
@@ -116,6 +117,25 @@ const speechPreviewBar = document.getElementById('speechPreviewBar');
 const speechPreviewText = document.getElementById('speechPreviewText');
 const scrollBottomBtn = document.getElementById('scrollBottomBtn');
 let userHasScrolledUp = false;
+
+// File Upload & Attachment Elements
+const fileUploadBtn = document.getElementById('fileUploadBtn');
+const fileInput = document.getElementById('fileInput');
+const filePreviewContainer = document.getElementById('filePreviewContainer');
+const filePreviewThumb = document.getElementById('filePreviewThumb');
+const filePreviewName = document.getElementById('filePreviewName');
+const filePreviewSize = document.getElementById('filePreviewSize');
+const fileRemoveBtn = document.getElementById('fileRemoveBtn');
+const dragDropOverlay = document.getElementById('dragDropOverlay');
+
+// Image Lightbox Elements
+const imageLightboxModal = document.getElementById('imageLightboxModal');
+const lightboxImg = document.getElementById('lightboxImg');
+const lightboxCaption = document.getElementById('lightboxCaption');
+const lightboxDownloadBtn = document.getElementById('lightboxDownloadBtn');
+const closeLightboxBtn = document.getElementById('closeLightboxBtn');
+
+let currentAttachedFile = null;
 
 // Preview Modal Elements
 const previewModal = document.getElementById('previewModal');
@@ -145,27 +165,44 @@ const settingsModal = document.getElementById('settingsModal');
 const closeSettingsBtn = document.getElementById('closeSettingsBtn');
 const cancelSettingsBtn = document.getElementById('cancelSettingsBtn');
 const saveSettingsBtn = document.getElementById('saveSettingsBtn');
-const apiKeyInput = document.getElementById('apiKeyInput');
-const toggleApiKeyVisibility = document.getElementById('toggleApiKeyVisibility');
-const groqApiKeyInput = document.getElementById('groqApiKeyInput');
-const toggleGroqKeyVisibility = document.getElementById('toggleGroqKeyVisibility');
-const openrouterApiKeyInput = document.getElementById('openrouterApiKeyInput');
-const toggleOpenRouterKeyVisibility = document.getElementById('toggleOpenRouterKeyVisibility');
-const databaseUrlInput = document.getElementById('databaseUrlInput');
 const voiceSelect = document.getElementById('voiceSelect');
 const voiceRate = document.getElementById('voiceRate');
 const voiceRateVal = document.getElementById('voiceRateVal');
 const autoSpeakCheck = document.getElementById('autoSpeakCheck');
+const enterToSendCheck = document.getElementById('enterToSendCheck');
+const defaultWebSearchCheck = document.getElementById('defaultWebSearchCheck');
+const settingsExportChatBtn = document.getElementById('settingsExportChatBtn');
+const clearAllChatsBtn = document.getElementById('clearAllChatsBtn');
+const settingsAccountCard = document.getElementById('settingsAccountCard');
+const settingsAccountAvatar = document.getElementById('settingsAccountAvatar');
+const settingsAccountName = document.getElementById('settingsAccountName');
+const settingsAccountDesc = document.getElementById('settingsAccountDesc');
 const settingsFeedback = document.getElementById('settingsFeedback');
 const voiceModelPill = document.getElementById('voiceModelPill');
 const voiceModelName = document.getElementById('voiceModelName');
 
-// Persistent auto-speak setting (default: false for silent chat mode)
+// Persistent settings initialization
 if (autoSpeakCheck) {
   const savedAutoSpeak = localStorage.getItem('sona_auto_speak');
   autoSpeakCheck.checked = savedAutoSpeak === 'true'; // false by default
   autoSpeakCheck.addEventListener('change', () => {
     localStorage.setItem('sona_auto_speak', autoSpeakCheck.checked ? 'true' : 'false');
+  });
+}
+
+if (enterToSendCheck) {
+  const savedEnterToSend = localStorage.getItem('sona_enter_to_send');
+  enterToSendCheck.checked = savedEnterToSend !== 'false'; // default true
+  enterToSendCheck.addEventListener('change', () => {
+    localStorage.setItem('sona_enter_to_send', enterToSendCheck.checked ? 'true' : 'false');
+  });
+}
+
+if (defaultWebSearchCheck) {
+  const savedDefWeb = localStorage.getItem('sona_default_web_search');
+  defaultWebSearchCheck.checked = savedDefWeb === 'true'; // default false
+  defaultWebSearchCheck.addEventListener('change', () => {
+    localStorage.setItem('sona_default_web_search', defaultWebSearchCheck.checked ? 'true' : 'false');
   });
 }
 
@@ -1067,11 +1104,11 @@ async function fetchSystemStatus() {
     // Database Badge
     if (data.db.connected) {
       dbStatusDot.className = 'status-dot active';
-      dbStatusText.textContent = 'Cloud SQL: Connected (Postgres)';
+      dbStatusText.textContent = 'Sona Cloud: Terhubung';
       dbStatusBadge.title = data.db.message;
     } else {
       dbStatusDot.className = 'status-dot warning';
-      dbStatusText.textContent = 'Cloud SQL: Ephemeral Safe';
+      dbStatusText.textContent = 'Sona Cloud: Mode Lokal';
       dbStatusBadge.title = data.db.message;
     }
 
@@ -1330,6 +1367,7 @@ async function deleteConversation(id) {
 function startNewChat() {
   currentConversationId = null;
   activeConvTitle.textContent = 'Obrolan Baru';
+  clearAttachedFile();
   renderConversationsList();
   messagesStream.innerHTML = '';
   welcomeHero.classList.remove('hidden');
@@ -1489,7 +1527,7 @@ function postProcessAiBubble(bubble, sources = []) {
   }
 }
 
-function appendMessageToStream(role, content, autoPlayAudio = false, sources = [], animateTypewriter = false, msgId = null) {
+function appendMessageToStream(role, content, autoPlayAudio = false, sources = [], animateTypewriter = false, msgId = null, attachment = null) {
   welcomeHero.classList.add('hidden');
 
   const row = document.createElement('div');
@@ -1501,58 +1539,105 @@ function appendMessageToStream(role, content, autoPlayAudio = false, sources = [
     const wrapper = document.createElement('div');
     wrapper.className = 'user-message-wrapper';
 
-    const bubble = document.createElement('div');
-    bubble.className = 'user-bubble';
-    bubble.textContent = content;
+    // Parse content for attachment if loaded from history (e.g. 📎 [Lampiran: filename])
+    let textContent = content || '';
+    let parsedAttachmentName = null;
 
-    const actions = document.createElement('div');
-    actions.className = 'user-bubble-actions';
+    const attachMatch = textContent.match(/^📎\s*\[Lampiran:\s*([^\]]+)\](?:\n\n)?([\s\S]*)$/);
+    if (attachMatch) {
+      parsedAttachmentName = attachMatch[1].trim();
+      textContent = attachMatch[2].trim();
+    }
 
-    // Edit button
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'btn-user-action btn-user-edit';
-    editBtn.title = 'Edit Pesan & Kirim Ulang';
-    editBtn.innerHTML = `
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 20h9"/>
-        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-      </svg>
-      <span>Edit</span>
-    `;
+    // Render attachment element if present
+    if (attachment || parsedAttachmentName) {
+      const attachContainer = document.createElement('div');
+      attachContainer.className = 'user-attachment-container';
 
-    // Copy button
-    const copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.className = 'btn-user-action btn-user-copy';
-    copyBtn.title = 'Salin Teks';
-    copyBtn.innerHTML = `
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-      </svg>
-      <span>Salin</span>
-    `;
+      if (attachment && attachment.type && attachment.type.startsWith('image/') && attachment.dataUrl) {
+        const imgWrap = document.createElement('div');
+        imgWrap.className = 'user-attachment-img-wrap';
+        imgWrap.title = 'Klik untuk memperbesar gambar';
+        imgWrap.innerHTML = `<img src="${attachment.dataUrl}" alt="${attachment.name}">`;
+        imgWrap.addEventListener('click', () => {
+          openImageLightbox(attachment.dataUrl, attachment.name);
+        });
+        attachContainer.appendChild(imgWrap);
+      } else {
+        const fileNameToDisplay = (attachment && attachment.name) || parsedAttachmentName;
+        const pill = document.createElement('div');
+        pill.className = 'user-attachment-badge-pill';
+        pill.innerHTML = `
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+            <polyline points="10 9 9 9 8 9"/>
+          </svg>
+          <span>${escapeHtml(fileNameToDisplay)}</span>
+        `;
+        attachContainer.appendChild(pill);
+      }
 
-    copyBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(bubble.textContent).then(() => {
-        const span = copyBtn.querySelector('span');
-        if (span) span.textContent = 'Tersalin!';
-        setTimeout(() => {
-          if (span) span.textContent = 'Salin';
-        }, 1800);
+      wrapper.appendChild(attachContainer);
+    }
+
+    if (textContent || (!attachment && !parsedAttachmentName)) {
+      const bubble = document.createElement('div');
+      bubble.className = 'user-bubble';
+      bubble.textContent = textContent;
+
+      const actions = document.createElement('div');
+      actions.className = 'user-bubble-actions';
+
+      // Edit button
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'btn-user-action btn-user-edit';
+      editBtn.title = 'Edit Pesan & Kirim Ulang';
+      editBtn.innerHTML = `
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 20h9"/>
+          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+        </svg>
+        <span>Edit</span>
+      `;
+
+      // Copy button
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'btn-user-action btn-user-copy';
+      copyBtn.title = 'Salin Teks';
+      copyBtn.innerHTML = `
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+        </svg>
+        <span>Salin</span>
+      `;
+
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(bubble.textContent).then(() => {
+          const span = copyBtn.querySelector('span');
+          if (span) span.textContent = 'Tersalin!';
+          setTimeout(() => {
+            if (span) span.textContent = 'Salin';
+          }, 1800);
+        });
       });
-    });
 
-    editBtn.addEventListener('click', () => {
-      startEditUserMessage(row, wrapper, bubble, actions);
-    });
+      editBtn.addEventListener('click', () => {
+        startEditUserMessage(row, wrapper, bubble, actions);
+      });
 
-    actions.appendChild(editBtn);
-    actions.appendChild(copyBtn);
+      actions.appendChild(editBtn);
+      actions.appendChild(copyBtn);
 
-    wrapper.appendChild(bubble);
-    wrapper.appendChild(actions);
+      wrapper.appendChild(bubble);
+      wrapper.appendChild(actions);
+    }
+
     row.appendChild(wrapper);
   } else {
     const avatar = document.createElement('div');
@@ -1971,8 +2056,8 @@ let isSendingMessage = false;
 
 async function handleSendMessage(text) {
   if (isSendingMessage) return; // Anti-spam: cegah pengiriman ganda bersamaan
-  const message = text || messageInput.value.trim();
-  if (!message) return;
+  const message = (text !== undefined ? text : messageInput.value).trim();
+  if (!message && !currentAttachedFile) return;
 
   // Guest Gate: Batasi 2 obrolan gratis untuk pengguna tanpa akun
   if (!currentUser && guestChatCount >= MAX_GUEST_CHATS) {
@@ -1982,18 +2067,25 @@ async function handleSendMessage(text) {
 
   isSendingMessage = true;
 
+  // Capture file to send and reset preview immediately
+  const attachedFileToSend = currentAttachedFile;
+  clearAttachedFile();
+
   // Reset scroll state on user input so view jumps to the new message
   userHasScrolledUp = false;
   updateScrollPillVisibility();
 
   // Add user message to UI
-  const userRow = appendMessageToStream('user', message, false);
+  const userRow = appendMessageToStream('user', message, false, [], false, null, attachedFileToSend);
   messageInput.value = '';
   autoResizeTextarea();
 
   // Track ephemeral in-memory guest messages
   if (!currentUser) {
-    guestSessionMessages.push({ role: 'user', content: message });
+    const guestMsgContent = attachedFileToSend
+      ? `📎 [Lampiran: ${attachedFileToSend.name}]${message ? '\n\n' + message : ''}`
+      : message;
+    guestSessionMessages.push({ role: 'user', content: guestMsgContent });
     try { sessionStorage.setItem('sona_guest_messages', JSON.stringify(guestSessionMessages)); } catch (_) {}
   }
 
@@ -2001,11 +2093,14 @@ async function handleSendMessage(text) {
   const loadingRow = document.createElement('div');
   loadingRow.className = 'message-row ai';
   loadingRow.id = 'aiLoadingRow';
+  const loadingText = attachedFileToSend
+    ? 'SonaAI sedang membaca & menganalisis dokumen lampiran...'
+    : 'SonaAI sedang berpikir...';
   loadingRow.innerHTML = `
     <div class="ai-avatar">Sona</div>
     <div class="ai-bubble-wrapper">
       <div class="ai-bubble" style="color: var(--text-dim); display: flex; align-items: center; gap: 8px;">
-        <span class="status-dot warning"></span> SonaAI sedang berpikir...
+        <span class="status-dot warning"></span> ${loadingText}
       </div>
     </div>
   `;
@@ -2025,6 +2120,9 @@ async function handleSendMessage(text) {
         conversationId: currentUser ? currentConversationId : null,
         userId: getActiveUserId(),
         message,
+        fileBase64: attachedFileToSend ? attachedFileToSend.base64 : undefined,
+        fileMimeType: attachedFileToSend ? attachedFileToSend.type : undefined,
+        fileName: attachedFileToSend ? attachedFileToSend.name : undefined,
         history: !currentUser ? guestSessionMessages.slice(0, -1) : undefined,
         model: modelSelect.value,
         apiKey: localStorage.getItem('sona_gemini_key') || undefined,
@@ -2730,6 +2828,109 @@ function autoResizeTextarea() {
   messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + 'px';
 }
 
+// Format byte sizes into readable string
+function formatBytes(bytes, decimals = 1) {
+  if (!+bytes) return '0 B';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+}
+
+// Handle File Selection (via Dialog, Drag & Drop, or Paste)
+function handleSelectFile(file) {
+  if (!file) return;
+
+  // Max 15MB file size limit
+  const maxBytes = 15 * 1024 * 1024;
+  if (file.size > maxBytes) {
+    alert(`Ukuran berkas (${formatBytes(file.size)}) melebihi batas maksimal 15 MB.`);
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = e.target.result;
+    const base64Data = dataUrl.split(',')[1];
+
+    let resolvedType = file.type || '';
+    if (!resolvedType || resolvedType === 'application/octet-stream') {
+      const ext = (file.name || '').split('.').pop().toLowerCase();
+      if (ext === 'pdf') resolvedType = 'application/pdf';
+      else if (['jpg', 'jpeg'].includes(ext)) resolvedType = 'image/jpeg';
+      else if (ext === 'png') resolvedType = 'image/png';
+      else if (ext === 'webp') resolvedType = 'image/webp';
+      else if (ext === 'gif') resolvedType = 'image/gif';
+      else if (['txt', 'md', 'csv'].includes(ext)) resolvedType = 'text/plain';
+      else if (['js', 'ts', 'jsx', 'tsx'].includes(ext)) resolvedType = 'text/javascript';
+      else if (ext === 'py') resolvedType = 'text/x-python';
+      else if (ext === 'json') resolvedType = 'application/json';
+      else resolvedType = 'application/octet-stream';
+    }
+
+    currentAttachedFile = {
+      name: file.name,
+      type: resolvedType,
+      size: file.size,
+      base64: base64Data,
+      dataUrl: dataUrl
+    };
+
+    // Update Preview Card UI
+    if (filePreviewContainer && filePreviewThumb && filePreviewName && filePreviewSize) {
+      filePreviewName.textContent = file.name;
+      filePreviewSize.textContent = formatBytes(file.size);
+
+      if (resolvedType.startsWith('image/')) {
+        filePreviewThumb.innerHTML = `<img src="${dataUrl}" alt="${escapeHtml(file.name)}">`;
+      } else {
+        const ext = file.name.split('.').pop().toUpperCase().slice(0, 4) || 'FILE';
+        filePreviewThumb.innerHTML = `
+          <div class="file-badge-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            <span class="badge-ext">${ext}</span>
+          </div>
+        `;
+      }
+
+      filePreviewContainer.classList.remove('hidden');
+    }
+
+    if (fileUploadBtn) {
+      fileUploadBtn.classList.add('has-file');
+    }
+
+    // Focus message input so user can directly type question about file
+    if (messageInput) {
+      messageInput.focus();
+    }
+  };
+
+  reader.readAsDataURL(file);
+}
+
+function clearAttachedFile() {
+  currentAttachedFile = null;
+  if (fileInput) fileInput.value = '';
+  if (filePreviewContainer) filePreviewContainer.classList.add('hidden');
+  if (fileUploadBtn) fileUploadBtn.classList.remove('has-file');
+}
+
+function openImageLightbox(src, name) {
+  if (!imageLightboxModal || !lightboxImg) return;
+  lightboxImg.src = src;
+  if (lightboxCaption) lightboxCaption.textContent = name || 'Gambar Lampiran';
+  if (lightboxDownloadBtn) {
+    lightboxDownloadBtn.href = src;
+    lightboxDownloadBtn.download = name || 'lampiran_sona.png';
+  }
+  imageLightboxModal.classList.remove('hidden');
+}
+
 // Event Listeners
 document.addEventListener('DOMContentLoaded', () => {
   initTextToSpeech();
@@ -2737,12 +2938,138 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchSystemStatus();
   loadConversations();
 
-  // Mobile menu
-  mobileMenuBtn.addEventListener('click', () => sidebar.classList.toggle('open'));
-  sidebarToggleBtn.addEventListener('click', () => sidebar.classList.remove('open'));
+  // Sidebar Toggle (Supports both Desktop Collapsible Sidebar and Mobile Drawer)
+  if (mobileMenuBtn) {
+    mobileMenuBtn.addEventListener('click', () => {
+      if (window.innerWidth <= 768) {
+        sidebar.classList.toggle('open');
+      } else {
+        if (appLayout) {
+          appLayout.classList.toggle('sidebar-collapsed');
+          const isCollapsed = appLayout.classList.contains('sidebar-collapsed');
+          localStorage.setItem('sona_sidebar_collapsed', isCollapsed ? 'true' : 'false');
+        }
+      }
+    });
+  }
+
+  if (sidebarToggleBtn) {
+    sidebarToggleBtn.addEventListener('click', () => {
+      if (window.innerWidth <= 768) {
+        sidebar.classList.remove('open');
+      } else {
+        if (appLayout) {
+          appLayout.classList.add('sidebar-collapsed');
+          localStorage.setItem('sona_sidebar_collapsed', 'true');
+        }
+      }
+    });
+  }
+
+  // Restore sidebar collapse state on desktop
+  if (window.innerWidth > 768 && localStorage.getItem('sona_sidebar_collapsed') === 'true' && appLayout) {
+    appLayout.classList.add('sidebar-collapsed');
+  }
+
+  // Click outside mobile sidebar to dismiss
+  document.addEventListener('click', (e) => {
+    if (window.innerWidth <= 768 && sidebar.classList.contains('open')) {
+      if (!sidebar.contains(e.target) && !mobileMenuBtn.contains(e.target)) {
+        sidebar.classList.remove('open');
+      }
+    }
+  });
 
   // New Chat
   newChatBtn.addEventListener('click', startNewChat);
+
+  // File Upload Button & File Input change
+  if (fileUploadBtn && fileInput) {
+    fileUploadBtn.addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (file) {
+        handleSelectFile(file);
+      }
+    });
+  }
+
+  if (fileRemoveBtn) {
+    fileRemoveBtn.addEventListener('click', () => {
+      clearAttachedFile();
+    });
+  }
+
+  // Drag and drop onto chat area or window
+  let dragCounter = 0;
+  window.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragCounter++;
+    if (dragDropOverlay) dragDropOverlay.classList.remove('hidden');
+  });
+
+  window.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      if (dragDropOverlay) dragDropOverlay.classList.add('hidden');
+    }
+  });
+
+  window.addEventListener('dragover', (e) => {
+    e.preventDefault();
+  });
+
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    if (dragDropOverlay) dragDropOverlay.classList.add('hidden');
+    const droppedFiles = e.dataTransfer?.files;
+    if (droppedFiles && droppedFiles.length > 0) {
+      handleSelectFile(droppedFiles[0]);
+    }
+  });
+
+  // Clipboard Paste Support (Cmd+V / Ctrl+V for Screenshots & Images)
+  window.addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type && (item.type.startsWith('image/') || item.kind === 'file')) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          handleSelectFile(file);
+          break;
+        }
+      }
+    }
+  });
+
+  // Image Lightbox Close Listeners
+  if (closeLightboxBtn && imageLightboxModal) {
+    closeLightboxBtn.addEventListener('click', () => {
+      imageLightboxModal.classList.add('hidden');
+    });
+
+    imageLightboxModal.addEventListener('click', (e) => {
+      if (e.target === imageLightboxModal) {
+        imageLightboxModal.classList.add('hidden');
+      }
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !imageLightboxModal.classList.contains('hidden')) {
+        imageLightboxModal.classList.add('hidden');
+      }
+    });
+  }
 
   // Chat Form Submit
   chatForm.addEventListener('submit', (e) => {
@@ -2753,6 +3080,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Enter to send (Shift+Enter for newline)
   messageInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      if (enterToSendCheck && !enterToSendCheck.checked) {
+        return; // User prefers to click send button manually
+      }
       e.preventDefault();
       handleSendMessage();
     }
@@ -2938,42 +3268,29 @@ document.addEventListener('DOMContentLoaded', () => {
   // Settings Modal
   openSettingsBtn.addEventListener('click', () => {
     settingsFeedback.className = 'settings-feedback hidden';
-    if (apiKeyInput && !apiKeyInput.value) {
-      apiKeyInput.value = localStorage.getItem('sona_gemini_key') || '';
+
+    // Refresh Account status info in Data tab
+    if (currentUser) {
+      if (settingsAccountName) settingsAccountName.textContent = currentUser.name || 'Pengguna Terdaftar';
+      if (settingsAccountDesc) settingsAccountDesc.textContent = currentUser.email || 'Akun Google Terhubung';
+      if (settingsAccountAvatar) {
+        if (currentUser.avatar) {
+          settingsAccountAvatar.innerHTML = `<img src="${currentUser.avatar}" alt="Avatar">`;
+        } else {
+          settingsAccountAvatar.textContent = (currentUser.name || currentUser.email || 'U')[0].toUpperCase();
+        }
+      }
+    } else {
+      if (settingsAccountName) settingsAccountName.textContent = 'Sesi Tamu';
+      if (settingsAccountDesc) settingsAccountDesc.textContent = 'Riwayat tersimpan aman di peramban Anda';
+      if (settingsAccountAvatar) settingsAccountAvatar.textContent = 'S';
     }
-    if (groqApiKeyInput && !groqApiKeyInput.value) {
-      groqApiKeyInput.value = localStorage.getItem('sona_groq_key') || '';
-    }
-    if (openrouterApiKeyInput && !openrouterApiKeyInput.value) {
-      openrouterApiKeyInput.value = localStorage.getItem('sona_openrouter_key') || '';
-    }
+
     settingsModal.classList.remove('hidden');
   });
 
   closeSettingsBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
   cancelSettingsBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
-
-  toggleApiKeyVisibility.addEventListener('click', () => {
-    const isPwd = apiKeyInput.type === 'password';
-    apiKeyInput.type = isPwd ? 'text' : 'password';
-    toggleApiKeyVisibility.textContent = isPwd ? 'Tutup' : 'Lihat';
-  });
-
-  if (toggleGroqKeyVisibility && groqApiKeyInput) {
-    toggleGroqKeyVisibility.addEventListener('click', () => {
-      const isPwd = groqApiKeyInput.type === 'password';
-      groqApiKeyInput.type = isPwd ? 'text' : 'password';
-      toggleGroqKeyVisibility.textContent = isPwd ? 'Tutup' : 'Lihat';
-    });
-  }
-
-  if (toggleOpenRouterKeyVisibility && openrouterApiKeyInput) {
-    toggleOpenRouterKeyVisibility.addEventListener('click', () => {
-      const isPwd = openrouterApiKeyInput.type === 'password';
-      openrouterApiKeyInput.type = isPwd ? 'text' : 'password';
-      toggleOpenRouterKeyVisibility.textContent = isPwd ? 'Tutup' : 'Lihat';
-    });
-  }
 
   // Voice Call Model Pill Sync
   function updateVoiceModelPill() {
@@ -3125,11 +3442,88 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Settings Tabs Navigation
+  document.querySelectorAll('.settings-tab-link').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const targetId = tab.dataset.tab;
+      document.querySelectorAll('.settings-tab-link').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.settings-tab-pane').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      const targetPane = document.getElementById(targetId);
+      if (targetPane) targetPane.classList.add('active');
+    });
+  });
+
+  // Font Size Setting
+  function applyFontSize(size) {
+    document.body.classList.remove('font-standard', 'font-medium', 'font-large');
+    document.body.classList.add(`font-${size}`);
+  }
+  const savedFontSize = localStorage.getItem('sona_font_size') || 'standard';
+  applyFontSize(savedFontSize);
+
+  document.querySelectorAll('.font-size-btn').forEach(btn => {
+    if (btn.dataset.size === savedFontSize) btn.classList.add('active');
+    else btn.classList.remove('active');
+
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.font-size-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const size = btn.dataset.size;
+      applyFontSize(size);
+      localStorage.setItem('sona_font_size', size);
+    });
+  });
+
+  // Settings Export Button
+  if (settingsExportChatBtn) {
+    settingsExportChatBtn.addEventListener('click', () => {
+      if (exportChatBtn) exportChatBtn.click();
+    });
+  }
+
+  // Clear All Chats Button
+  if (clearAllChatsBtn) {
+    clearAllChatsBtn.addEventListener('click', async () => {
+      if (!confirm('Apakah Anda yakin ingin menghapus semua riwayat obrolan? Tindakan ini tidak dapat dibatalkan.')) return;
+      try {
+        clearAllChatsBtn.disabled = true;
+        clearAllChatsBtn.textContent = 'Menghapus...';
+
+        if (!currentUser) {
+          guestSessionMessages = [];
+          guestChatCount = 0;
+          sessionStorage.removeItem('sona_guest_messages');
+          localStorage.removeItem('sona_guest_chats');
+        } else {
+          const toDelete = [...conversations];
+          for (const c of toDelete) {
+            await fetch(`/api/conversations/${c.id}`, {
+              method: 'DELETE',
+              headers: { 'x-user-id': getActiveUserId() }
+            });
+          }
+        }
+
+        conversations = [];
+        renderConversationsList();
+        startNewChat();
+        settingsModal.classList.add('hidden');
+        clearAllChatsBtn.disabled = false;
+        clearAllChatsBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg><span>Hapus Semua Riwayat Obrolan</span>`;
+      } catch (err) {
+        console.error('Gagal menghapus percakapan:', err);
+        alert('Gagal menghapus percakapan: ' + err.message);
+        clearAllChatsBtn.disabled = false;
+      }
+    });
+  }
+
   saveSettingsBtn.addEventListener('click', async () => {
     saveSettingsBtn.disabled = true;
     saveSettingsBtn.textContent = 'Menyimpan...';
 
-    // Persist audio preferences to localStorage immediately
+    // Persist audio & chat preferences to localStorage immediately
     if (voiceSelect && voiceSelect.value) {
       localStorage.setItem('sona_voice', voiceSelect.value);
     }
@@ -3139,56 +3533,34 @@ document.addEventListener('DOMContentLoaded', () => {
     if (autoSpeakCheck) {
       localStorage.setItem('sona_auto_speak', autoSpeakCheck.checked ? 'true' : 'false');
     }
-
-    const payload = {};
-    if (apiKeyInput && apiKeyInput.value.trim()) {
-      payload.geminiApiKey = apiKeyInput.value.trim();
-      localStorage.setItem('sona_gemini_key', apiKeyInput.value.trim());
+    if (enterToSendCheck) {
+      localStorage.setItem('sona_enter_to_send', enterToSendCheck.checked ? 'true' : 'false');
     }
-    if (groqApiKeyInput && groqApiKeyInput.value.trim()) {
-      payload.groqApiKey = groqApiKeyInput.value.trim();
-      localStorage.setItem('sona_groq_key', groqApiKeyInput.value.trim());
-    }
-    if (openrouterApiKeyInput && openrouterApiKeyInput.value.trim()) {
-      payload.openrouterApiKey = openrouterApiKeyInput.value.trim();
-      localStorage.setItem('sona_openrouter_key', openrouterApiKeyInput.value.trim());
-    }
-    if (databaseUrlInput && databaseUrlInput.value.trim()) {
-      payload.databaseUrl = databaseUrlInput.value.trim();
+    if (defaultWebSearchCheck) {
+      localStorage.setItem('sona_default_web_search', defaultWebSearchCheck.checked ? 'true' : 'false');
     }
 
-    try {
-      const res = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
+    settingsFeedback.className = 'settings-feedback success';
+    settingsFeedback.textContent = 'Pengaturan berhasil disimpan!';
+    settingsFeedback.classList.remove('hidden');
 
-      settingsFeedback.className = 'settings-feedback success';
-      settingsFeedback.textContent = data.message || 'Pengaturan berhasil disimpan!';
-      settingsFeedback.classList.remove('hidden');
-
-      fetchSystemStatus();
-      setTimeout(() => {
-        settingsModal.classList.add('hidden');
-        saveSettingsBtn.disabled = false;
-        saveSettingsBtn.textContent = 'Simpan Pengaturan';
-      }, 1200);
-    } catch (err) {
-      settingsFeedback.className = 'settings-feedback error';
-      settingsFeedback.textContent = 'Gagal menyimpan pengaturan: ' + err.message;
-      settingsFeedback.classList.remove('hidden');
+    setTimeout(() => {
+      settingsModal.classList.add('hidden');
       saveSettingsBtn.disabled = false;
       saveSettingsBtn.textContent = 'Simpan Pengaturan';
-    }
+    }, 700);
   });
 
   // Feature Card Quick Prompts
   cardPromptVoice.addEventListener('click', openVoiceCall);
 
   cardPromptCloud.addEventListener('click', () => {
-    openSettingsBtn.click();
+    if (webSearchBtn && !webSearchActive) {
+      webSearchBtn.click();
+    }
+    messageInput.value = 'Berita teknologi dan sains terkini hari ini apa saja?';
+    messageInput.focus();
+    autoResizeTextarea();
   });
 
   cardPromptPro.addEventListener('click', () => {

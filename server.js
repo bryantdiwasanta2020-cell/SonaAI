@@ -317,6 +317,9 @@ app.post('/api/chat', async (req, res) => {
       message,
       audioBase64,
       audioMimeType,
+      fileBase64,
+      fileMimeType,
+      fileName,
       model = 'gemini-3.5-flash-lite',
       webSearch = false,
       language
@@ -324,17 +327,30 @@ app.post('/api/chat', async (req, res) => {
 
     const hasAudio = !!(audioBase64 && audioBase64.trim());
     const hasText = !!(message && message.trim());
+    const hasFile = !!(fileBase64 && fileBase64.trim());
 
-    if (!hasText && !hasAudio) {
-      return res.status(400).json({ error: 'Pesan atau rekaman suara tidak boleh kosong.' });
+    if (!hasText && !hasAudio && !hasFile) {
+      return res.status(400).json({ error: 'Pesan, berkas, atau rekaman suara tidak boleh kosong.' });
     }
 
     let conversationId = rawId;
     let isNewConv = false;
     const userId = getUserId(req);
 
-    const summaryText = hasText ? message : 'Pesan Suara';
-    const displayMsg = hasText ? message : '[Pesan Suara]';
+    let summaryText = 'Percakapan Baru';
+    let displayMsg = '';
+
+    if (hasFile) {
+      const fileTag = `📎 [Lampiran: ${fileName || 'Berkas'}]`;
+      displayMsg = hasText ? `${fileTag}\n\n${message.trim()}` : fileTag;
+      summaryText = hasText ? message.trim() : `File: ${fileName || 'Lampiran'}`;
+    } else if (hasAudio) {
+      displayMsg = hasText ? message.trim() : '[Pesan Suara]';
+      summaryText = hasText ? message.trim() : 'Pesan Suara';
+    } else {
+      displayMsg = message.trim();
+      summaryText = message.trim();
+    }
 
     const apiKey = req.body.apiKey || req.headers['x-gemini-key'];
     const groqApiKey = req.body.groqApiKey || req.headers['x-groq-key'];
@@ -347,6 +363,9 @@ app.post('/api/chat', async (req, res) => {
         prompt: message || '',
         audioBase64,
         audioMimeType,
+        fileBase64,
+        fileMimeType,
+        fileName,
         history: guestHistory,
         model,
         apiKey,
@@ -362,6 +381,7 @@ app.post('/api/chat', async (req, res) => {
         userTranscription: aiResult.userTranscription || '',
         reply: aiResult.text,
         sources: aiResult.sources || [],
+        attachment: hasFile ? { name: fileName, type: fileMimeType } : null,
         isGuest: true
       });
     }
@@ -385,6 +405,9 @@ app.post('/api/chat', async (req, res) => {
       prompt: message || '',
       audioBase64,
       audioMimeType,
+      fileBase64,
+      fileMimeType,
+      fileName,
       history: history.slice(0, -1), // exclude the one we just added to avoid duplicate prompt
       model,
       apiKey,
@@ -423,7 +446,8 @@ app.post('/api/chat', async (req, res) => {
       aiMessage: aiMsg,
       isDemo: aiResult.isDemo,
       sources: aiResult.sources || [],
-      queries: aiResult.queries || []
+      queries: aiResult.queries || [],
+      attachment: hasFile ? { name: fileName, type: fileMimeType } : null
     });
   } catch (error) {
     console.error('Chat API Error:', error);
